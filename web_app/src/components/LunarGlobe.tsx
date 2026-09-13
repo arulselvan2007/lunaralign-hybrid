@@ -119,6 +119,14 @@ export default function LunarGlobe({
         viewer.scene.backgroundColor = Cesium.Color.BLACK;
         viewer.scene.highDynamicRange = true;
 
+        // Explicitly configure Cesium camera controller for Google Earth-style lunar navigation
+        viewer.screenSpaceCameraController.enableRotate = true;
+        viewer.screenSpaceCameraController.enableTranslate = true;
+        viewer.screenSpaceCameraController.enableZoom = true;
+        viewer.screenSpaceCameraController.enableTilt = true;
+        viewer.screenSpaceCameraController.enableLook = true;
+        viewer.screenSpaceCameraController.enableCollisionDetection = false;
+
         // Configure realistic solar lighting angle to cast distinct crater relief along terminator
         // Lock clock to a dramatic low-sun angle over the South Pole
         const initialDate = Cesium.JulianDate.fromDate(new Date("2023-08-23T12:00:00Z"));
@@ -562,22 +570,22 @@ export default function LunarGlobe({
 
       {/* Top Banner Status Overlay */}
       <div className="absolute top-4 left-4 z-10 flex items-center space-x-2.5 pointer-events-none">
-        <div className="px-3 py-1.5 rounded-xl bg-black/75 backdrop-blur-md border border-cyan-500/30 text-xs font-mono text-cyan-300 flex items-center space-x-2 shadow-lg">
+        <div className="px-3 py-1.5 rounded-xl bg-black/75 backdrop-blur-md border border-cyan-500/30 text-xs font-mono text-cyan-300 flex items-center space-x-2 shadow-lg pointer-events-auto">
           <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
           <span>ELLIPSOID: MOON (R=1,737.4 km)</span>
         </div>
-        <div className="px-3 py-1.5 rounded-xl bg-black/75 backdrop-blur-md border border-white/20 text-xs font-mono text-slate-300 shadow-lg">
+        <div className="px-3 py-1.5 rounded-xl bg-black/75 backdrop-blur-md border border-white/20 text-xs font-mono text-slate-300 shadow-lg pointer-events-auto">
           TEXTURE: LROC WAC / SHADED RELIEF
         </div>
       </div>
 
-      {/* Floating 3D Navigation Controls */}
-      <div className="absolute top-4 right-4 z-10 flex flex-col space-y-2">
+      {/* Floating 3D Navigation Controls (Google Earth style) */}
+      <div className="absolute top-4 right-4 z-10 flex flex-col space-y-2 pointer-events-none">
         <button
           type="button"
           onClick={resetToSouthPole3000km}
           title="Reset View: South Pole / Statio Shiv Shakti (3,000 km Alt)"
-          className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 hover:text-cyan-300 border border-white/15 backdrop-blur-md transition-all shadow-lg"
+          className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 hover:text-cyan-300 border border-white/15 backdrop-blur-md transition-all shadow-lg pointer-events-auto"
         >
           <Compass className="w-5 h-5" />
         </button>
@@ -585,7 +593,7 @@ export default function LunarGlobe({
           type="button"
           onClick={zoomIn}
           title="Zoom In"
-          className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 hover:text-cyan-300 border border-white/15 backdrop-blur-md transition-all shadow-lg"
+          className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 hover:text-cyan-300 border border-white/15 backdrop-blur-md transition-all shadow-lg pointer-events-auto"
         >
           <ZoomIn className="w-5 h-5" />
         </button>
@@ -593,7 +601,7 @@ export default function LunarGlobe({
           type="button"
           onClick={zoomOut}
           title="Zoom Out"
-          className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 hover:text-cyan-300 border border-white/15 backdrop-blur-md transition-all shadow-lg"
+          className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 hover:text-cyan-300 border border-white/15 backdrop-blur-md transition-all shadow-lg pointer-events-auto"
         >
           <ZoomOut className="w-5 h-5" />
         </button>
@@ -601,7 +609,7 @@ export default function LunarGlobe({
           type="button"
           onClick={applySensorLayer}
           title="Re-project Sensor Layers"
-          className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 hover:text-cyan-300 border border-white/15 backdrop-blur-md transition-all shadow-lg"
+          className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 hover:text-cyan-300 border border-white/15 backdrop-blur-md transition-all shadow-lg pointer-events-auto"
         >
           <RefreshCw className="w-5 h-5" />
         </button>
@@ -609,12 +617,12 @@ export default function LunarGlobe({
 
       {/* Loading Overlay */}
       {isLoading && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm">
-          <div className="relative w-16 h-16">
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-black/60 backdrop-blur-sm pointer-events-none">
+          <div className="relative w-16 h-16 pointer-events-auto">
             <div className="absolute inset-0 rounded-full border-2 border-cyan-500/20 animate-ping" />
             <div className="w-16 h-16 rounded-full border-2 border-transparent border-t-cyan-400 border-r-cyan-400 animate-spin" />
           </div>
-          <p className="mt-4 font-mono text-sm tracking-wider text-cyan-300 uppercase animate-pulse">
+          <p className="mt-4 font-mono text-sm tracking-wider text-cyan-300 uppercase animate-pulse pointer-events-auto">
             Processing Lunar Surface Ingestion &amp; MAGSAC+ Matching...
           </p>
         </div>

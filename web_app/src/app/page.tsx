@@ -22,6 +22,36 @@ const LunarGlobe = dynamic(() => import("@/components/LunarGlobe"), {
   ),
 });
 
+/**
+ * Robust fetch parser that strictly checks response.ok and reads raw response
+ * text first to prevent JSON parse crashes on non-JSON (e.g. FastAPI 500 HTML) errors.
+ */
+async function safeFetchJson<T = any>(res: Response): Promise<T> {
+  const rawText = await res.text();
+  let parsedJson: any = null;
+
+  try {
+    parsedJson = rawText ? JSON.parse(rawText) : null;
+  } catch {
+    // Non-JSON response (e.g. 500/502 HTML error page from uvicorn or reverse proxy)
+    if (!res.ok) {
+      const cleanSnippet = rawText.replace(/<[^>]*>?/gm, "").trim().slice(0, 250);
+      throw new Error(`Server Error (${res.status}): ${cleanSnippet || res.statusText}`);
+    }
+    throw new Error(`Invalid non-JSON response received from server (${res.status}).`);
+  }
+
+  if (!res.ok) {
+    const errorDetail =
+      parsedJson?.detail ||
+      parsedJson?.message ||
+      `Request failed with HTTP status ${res.status}`;
+    throw new Error(typeof errorDetail === "string" ? errorDetail : JSON.stringify(errorDetail));
+  }
+
+  return parsedJson as T;
+}
+
 export default function LunarAlignMissionControl() {
   const [tiles, setTiles] = useState<Array<{ filename: string; relative_path: string; size_bytes: number }>>([]);
   const [metrics, setMetrics] = useState<any | null>(null);
@@ -76,13 +106,13 @@ export default function LunarAlignMissionControl() {
 
       const tilesRes = await fetch("/api/tiles");
       if (tilesRes.ok) {
-        const data = await tilesRes.json();
-        setTiles(data);
+        const data = await safeFetchJson(tilesRes);
+        if (Array.isArray(data)) setTiles(data);
       }
 
       const metricsRes = await fetch("/api/metrics");
       if (metricsRes.ok) {
-        const data = await metricsRes.json();
+        const data = await safeFetchJson(metricsRes);
         setMetrics(data);
       }
     } catch (err) {
@@ -112,12 +142,7 @@ export default function LunarAlignMissionControl() {
         body: JSON.stringify(params),
       });
 
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.detail || "Alignment failed.");
-      }
-
-      const matchData = await res.json();
+      const matchData = await safeFetchJson(res);
       setMetrics(matchData);
       if (matchData.viz_url) {
         setActiveVizUrl(`${matchData.viz_url}?t=${Date.now()}`);
@@ -147,11 +172,7 @@ export default function LunarAlignMissionControl() {
         }),
       });
 
-      if (!res.ok) {
-        const errData = await res.json();
-        throw new Error(errData.detail || "Ingestion failed.");
-      }
-
+      await safeFetchJson(res);
       await fetchBackendData();
     } catch (err: any) {
       alert(`Ingestion error: ${err.message}`);
