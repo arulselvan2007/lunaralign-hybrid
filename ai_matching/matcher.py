@@ -63,6 +63,7 @@ class LunarMatcher:
         reproj_threshold: float = 3.0,
         confidence: float = 0.999,
         max_iters: int = 10000,
+        max_keypoints: int = 2048,
     ) -> None:
         """
         Initialize the LunarMatcher pipeline.
@@ -73,6 +74,7 @@ class LunarMatcher:
             reproj_threshold: Maximum noise scale for MAGSAC+ marginalization (pixels).
             confidence: Verification confidence probability (e.g., 0.999 = 99.9%).
             max_iters: Maximum sampling iterations for USAC_MAGSAC consensus loop.
+            max_keypoints: Maximum number of salient keypoints retained per tile (prevents OOM).
         """
         self._check_dependencies()
 
@@ -82,9 +84,10 @@ class LunarMatcher:
         self.reproj_threshold = float(reproj_threshold)
         self.confidence = float(confidence)
         self.max_iters = int(max_iters)
+        self.max_keypoints = int(max_keypoints)
 
         print(f"[LunarMatcher] Initializing on device: {self.device}")
-        print(f"[LunarMatcher] Feature Extractor: {self.feature_type.upper()} | Matcher: LightGlue")
+        print(f"[LunarMatcher] Feature Extractor: {self.feature_type.upper()} | Matcher: LightGlue (max_kpts={self.max_keypoints})")
         print(f"[LunarMatcher] Robust Estimator: USAC_MAGSAC (threshold={self.reproj_threshold}px, conf={self.confidence})")
 
         # Initialize deep models
@@ -234,6 +237,17 @@ class LunarMatcher:
         kpts_b = features_b.keypoints  # (Nb, 2)
         desc_b = features_b.descriptors  # (Nb, D)
 
+        # Filter top-K keypoints by detection score to prevent OOM in dense cross-attention
+        if len(kpts_a) > self.max_keypoints:
+            topk_a = torch.topk(features_a.detection_scores, self.max_keypoints).indices
+            kpts_a = kpts_a[topk_a]
+            desc_a = desc_a[topk_a]
+
+        if len(kpts_b) > self.max_keypoints:
+            topk_b = torch.topk(features_b.detection_scores, self.max_keypoints).indices
+            kpts_b = kpts_b[topk_b]
+            desc_b = desc_b[topk_b]
+
         if len(kpts_a) == 0 or len(kpts_b) == 0:
             print("[LunarMatcher] WARNING: Zero keypoints detected in one or both tiles.")
             return np.empty((0, 2)), np.empty((0, 2)), np.empty((0,))
@@ -252,8 +266,29 @@ class LunarMatcher:
             },
         }
 
-        # 3. LightGlue inference
-        out = self.matcher(data)
+        # 3. LightGlue inference with automatic CPU fallback if MPS memory limit is hit
+        try:
+            out = self.matcher(data)
+        except RuntimeError as e:
+            if "out of memory" in str(e).lower() or "mps" in str(e).lower():
+                print(f"[LunarMatcher] MPS memory warning ({e}). Falling back to CPU for LightGlue matching...")
+                cpu_data = {
+                    "image0": {
+                        "keypoints": data["image0"]["keypoints"].cpu(),
+                        "descriptors": data["image0"]["descriptors"].cpu(),
+                        "image_size": data["image0"]["image_size"].cpu(),
+                    },
+                    "image1": {
+                        "keypoints": data["image1"]["keypoints"].cpu(),
+                        "descriptors": data["image1"]["descriptors"].cpu(),
+                        "image_size": data["image1"]["image_size"].cpu(),
+                    },
+                }
+                cpu_matcher = LightGlue(features=self.feature_type).to("cpu")
+                cpu_matcher.eval()
+                out = cpu_matcher(cpu_data)
+            else:
+                raise
 
         matches = out["matches"][0]  # (K, 2) indexing (idx_a, idx_b)
         scores = out["scores"][0]  # (K,)
@@ -589,6 +624,12 @@ def main() -> int:
         help="Maximum sampling iterations for the USAC_MAGSAC solver",
     )
     parser.add_argument(
+        "--max-kpts",
+        type=int,
+        default=2048,
+        help="Maximum salient keypoints to retain per tile (prevents attention OOM)",
+    )
+    parser.add_argument(
         "--device",
         type=str,
         default="auto",
@@ -604,6 +645,7 @@ def main() -> int:
         reproj_threshold=args.reproj_thresh,
         confidence=args.confidence,
         max_iters=args.max_iters,
+        max_keypoints=args.max_kpts,
     )
 
     results = matcher.match_tiles(
