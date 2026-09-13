@@ -51,6 +51,130 @@ interface LunarGlobeProps {
   flyToLandmark?: LunarLandmark | null;
 }
 
+/**
+ * Procedural HTML5 Canvas Lunar Surface Generator.
+ * Generates an equirectangular (2048x1024) texture featuring:
+ * - Lunar anorthositic highlands (base grey regolith)
+ * - Major dark basaltic volcanic maria (Imbrium, Procellarum, Serenitatis, Tranquillitatis, Crisium, Orientale, South Pole-Aitken)
+ * - Prominent rayed impact craters (Tycho, Copernicus, Shackleton, Boguslawsky)
+ * Guarantees zero blank-sphere artifacts even if /textures/moon_global.jpg is missing or 404.
+ */
+function createProceduralLunarCanvas(): HTMLCanvasElement {
+  const canvas = document.createElement("canvas");
+  canvas.width = 2048;
+  canvas.height = 1024;
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return canvas;
+
+  // 1. Base Highlands Regolith (Lighter grey anorthositic crust)
+  ctx.fillStyle = "#9ba0a6";
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // Subtle global crustal albedo variation
+  const crustGrad = ctx.createLinearGradient(0, 0, 0, canvas.height);
+  crustGrad.addColorStop(0.0, "rgba(90, 95, 105, 0.45)");
+  crustGrad.addColorStop(0.5, "rgba(160, 165, 172, 0.15)");
+  crustGrad.addColorStop(1.0, "rgba(80, 85, 95, 0.5)");
+  ctx.fillStyle = crustGrad;
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+  // 2. Major Lunar Maria (Dark basaltic volcanic plains)
+  const maria: Array<[number, number, number, number, string]> = [
+    // Oceanus Procellarum & Mare Imbrium (Western Nearside)
+    [0.40 * canvas.width, 0.35 * canvas.height, 240, 170, "#3e4248"],
+    [0.45 * canvas.width, 0.30 * canvas.height, 180, 130, "#383c42"],
+    // Mare Serenitatis
+    [0.55 * canvas.width, 0.32 * canvas.height, 130, 110, "#363a40"],
+    // Mare Tranquillitatis (Apollo 11 site)
+    [0.58 * canvas.width, 0.45 * canvas.height, 140, 105, "#32353a"],
+    // Mare Crisium
+    [0.66 * canvas.width, 0.38 * canvas.height, 90, 75, "#2e3238"],
+    // Mare Fecunditatis
+    [0.63 * canvas.width, 0.52 * canvas.height, 110, 95, "#3a3e44"],
+    // Mare Nectaris
+    [0.59 * canvas.width, 0.58 * canvas.height, 80, 70, "#3a3e44"],
+    // Mare Nubium & Mare Cognitum
+    [0.45 * canvas.width, 0.55 * canvas.height, 120, 95, "#3a3e44"],
+    // Mare Humorum
+    [0.38 * canvas.width, 0.60 * canvas.height, 75, 65, "#383c42"],
+    // South Pole - Aitken Basin (Deep farside southern basin)
+    [0.95 * canvas.width, 0.78 * canvas.height, 210, 140, "#484c54"],
+    [0.05 * canvas.width, 0.78 * canvas.height, 210, 140, "#484c54"],
+    // Mare Orientale (Western limb concentric rings)
+    [0.24 * canvas.width, 0.55 * canvas.height, 95, 90, "#34383e"],
+    // Mare Moscoviense (Farside)
+    [0.88 * canvas.width, 0.32 * canvas.height, 80, 70, "#363a40"],
+  ];
+
+  maria.forEach(([cx, cy, rx, ry, col]) => {
+    ctx.save();
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI * 2);
+    ctx.fillStyle = col;
+    ctx.filter = "blur(18px)";
+    ctx.fill();
+    ctx.restore();
+  });
+
+  // 3. Prominent Rayed Craters (Tycho, Copernicus, Shackleton, Boguslawsky)
+  const rayCraters: Array<[number, number, number, boolean]> = [
+    // Tycho (Nearside South with bright radial ray system)
+    [0.47 * canvas.width, 0.74 * canvas.height, 26, true],
+    // Copernicus
+    [0.44 * canvas.width, 0.44 * canvas.height, 28, true],
+    // Kepler
+    [0.39 * canvas.width, 0.46 * canvas.height, 16, true],
+    // Aristarchus (Brightest albedo)
+    [0.37 * canvas.width, 0.38 * canvas.height, 18, false],
+    // Shackleton / South Pole (Chandrayaan exploration zone)
+    [0.50 * canvas.width, 0.96 * canvas.height, 22, false],
+    // Boguslawsky Crater (Lat -72.9)
+    [0.62 * canvas.width, 0.90 * canvas.height, 30, false],
+    // Jackson (Farside ray crater)
+    [0.92 * canvas.width, 0.38 * canvas.height, 22, true],
+  ];
+
+  rayCraters.forEach(([cx, cy, r, hasRays]) => {
+    if (hasRays) {
+      ctx.strokeStyle = "rgba(225, 230, 240, 0.4)";
+      ctx.lineWidth = 1.5;
+      for (let a = 0; a < 360; a += 15) {
+        const rad = (a * Math.PI) / 180;
+        const len = r * (4.5 + (a % 4));
+        ctx.beginPath();
+        ctx.moveTo(cx, cy);
+        ctx.lineTo(cx + Math.cos(rad) * len, cy + Math.sin(rad) * len);
+        ctx.stroke();
+      }
+    }
+    // Depressed dark crater bowl
+    ctx.beginPath();
+    ctx.arc(cx, cy, r, 0, Math.PI * 2);
+    ctx.fillStyle = "#26292f";
+    ctx.fill();
+    // Bright elevated rim
+    ctx.strokeStyle = "#e2e6ed";
+    ctx.lineWidth = 2.5;
+    ctx.stroke();
+  });
+
+  // 4. Distributed impact craters
+  for (let i = 0; i < 280; i++) {
+    const rx = Math.random() * canvas.width;
+    const ry = Math.random() * canvas.height;
+    const rad = 2 + Math.random() * 9;
+    ctx.beginPath();
+    ctx.arc(rx, ry, rad, 0, Math.PI * 2);
+    ctx.fillStyle = "#2c3036";
+    ctx.fill();
+    ctx.strokeStyle = "rgba(215, 220, 230, 0.45)";
+    ctx.lineWidth = 1;
+    ctx.stroke();
+  }
+
+  return canvas;
+}
+
 export default function LunarGlobe({
   lunarCoords,
   metrics,
@@ -136,15 +260,36 @@ export default function LunarGlobe({
         // Clear any residual imagery layers
         viewer.imageryLayers.removeAll();
 
-        // 2. Attach High-Resolution Global Lunar Imagery & Shaded Relief
-        // Load official open-source local global Moon texture with zero network latency
-        const lunarImageryProvider = new Cesium.SingleTileImageryProvider({
-          url: '/textures/moon_global.jpg',
+        // 2. Attach High-Resolution Global Lunar Imagery with Fail-Safe Fallback
+        // Step A: Immediately attach the procedural HTML5 canvas fallback
+        // This guarantees that the Moon surface is ALWAYS visible immediately with zero blank-sphere artifacts.
+        const proceduralCanvas = createProceduralLunarCanvas();
+        const fallbackProvider = new Cesium.SingleTileImageryProvider({
+          url: proceduralCanvas.toDataURL("image/jpeg", 0.9),
           rectangle: Cesium.Rectangle.fromDegrees(-180, -90, 180, 90),
         });
         viewer.imageryLayers.removeAll();
-        viewer.imageryLayers.addImageryProvider(lunarImageryProvider);
+        viewer.imageryLayers.addImageryProvider(fallbackProvider);
         viewer.scene.globe.enableLighting = true;
+
+        // Step B: Probe /textures/moon_global.jpg; upgrade smoothly if available
+        // If it fails (404 / network), the procedural canvas remains active seamlessly.
+        const textureImg = new Image();
+        textureImg.onload = () => {
+          if (viewer && !viewer.isDestroyed()) {
+            const lunarImageryProvider = new Cesium.SingleTileImageryProvider({
+              url: "/textures/moon_global.jpg",
+              rectangle: Cesium.Rectangle.fromDegrees(-180, -90, 180, 90),
+            });
+            viewer.imageryLayers.removeAll();
+            viewer.imageryLayers.addImageryProvider(lunarImageryProvider);
+            viewer.scene.globe.enableLighting = true;
+          }
+        };
+        textureImg.onerror = () => {
+          console.warn("[LunarGlobe] /textures/moon_global.jpg unavailable. Active fail-safe: Procedural HTML5 Lunar Canvas.");
+        };
+        textureImg.src = "/textures/moon_global.jpg";
 
         // 3. Camera Initial View & Smooth FlyTo (South Pole / Statio Shiv Shakti @ 3,000 km altitude)
         // Global Framing view: 7,000 km looking at Southern Hemisphere

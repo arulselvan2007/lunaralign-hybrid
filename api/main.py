@@ -22,20 +22,92 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-# Project Root Resolution
-PROJECT_ROOT = Path(__file__).resolve().parent.parent
-DATA_DIR = PROJECT_ROOT / "data"
+# Project Root Resolution (Strict Absolute Path Anchoring)
+ROOT_DIR = Path(__file__).resolve().parent.parent
+PROJECT_ROOT = ROOT_DIR  # Alias for backward compatibility
+DATA_DIR = ROOT_DIR / "data"
 RAW_DIR = DATA_DIR / "raw"
 TILES_DIR = DATA_DIR / "tiles"
-CORE_INGEST_BIN = PROJECT_ROOT / "core_ingestion" / "ingest_geotiff"
-MATCHER_SCRIPT = PROJECT_ROOT / "ai_matching" / "matcher.py"
-PYTHON_BIN = PROJECT_ROOT / "sih_env" / "bin" / "python3"
+CORE_INGEST_BIN = ROOT_DIR / "core_ingestion" / "ingest_geotiff"
+MATCHER_SCRIPT = ROOT_DIR / "ai_matching" / "matcher.py"
+PYTHON_BIN = ROOT_DIR / "sih_env" / "bin" / "python3"
 if not PYTHON_BIN.exists():
     PYTHON_BIN = Path(sys.executable)
 
+DEFAULT_METRICS_JSON = DATA_DIR / "metrics.json"
+DEFAULT_VIZ_PNG = DATA_DIR / "matches_visualization.png"
+
 # Ensure essential directories exist
+DATA_DIR.mkdir(parents=True, exist_ok=True)
 RAW_DIR.mkdir(parents=True, exist_ok=True)
 TILES_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def resolve_file_path(path_str: str, default_dir: Path) -> Path:
+    """
+    Resolve any incoming path string to a strict absolute Path.
+    Handles:
+    - Absolute paths: '/Users/.../data/tiles/chunk_x0_y0.tif'
+    - Relative to project root: 'data/tiles/chunk_x0_y0.tif'
+    - Relative to default_dir: 'chunk_x0_y0.tif'
+    - Web static URLs: '/static/tiles/chunk_x0_y0.tif'
+    """
+    if not path_str:
+        return default_dir
+
+    cleaned = path_str.strip()
+    if cleaned.startswith("/static/tiles/"):
+        cleaned = cleaned.replace("/static/tiles/", "")
+        return (TILES_DIR / cleaned).resolve()
+    elif cleaned.startswith("/static/raw/"):
+        cleaned = cleaned.replace("/static/raw/", "")
+        return (RAW_DIR / cleaned).resolve()
+    elif cleaned.startswith("/static/"):
+        cleaned = cleaned.replace("/static/", "")
+        return (DATA_DIR / cleaned).resolve()
+
+    p = Path(cleaned)
+    if p.is_absolute() and p.exists():
+        return p.resolve()
+
+    candidate_root = (ROOT_DIR / cleaned).resolve()
+    if candidate_root.exists():
+        return candidate_root
+
+    candidate_default = (default_dir / cleaned).resolve()
+    if candidate_default.exists():
+        return candidate_default
+
+    candidate_name = (default_dir / p.name).resolve()
+    if candidate_name.exists():
+        return candidate_name
+
+    return candidate_root
+
+
+def resolve_output_path(path_str: str, default_path: Path) -> Path:
+    """
+    Resolve output paths to a strictly absolute path and ensure parent directories exist.
+    """
+    if not path_str:
+        default_path.parent.mkdir(parents=True, exist_ok=True)
+        return default_path.resolve()
+
+    cleaned = path_str.strip()
+    if cleaned.startswith("/static/"):
+        cleaned = cleaned.replace("/static/", "")
+        out = (DATA_DIR / cleaned).resolve()
+    else:
+        p = Path(cleaned)
+        if p.is_absolute():
+            out = p.resolve()
+        elif "/" in cleaned or "\\" in cleaned:
+            out = (ROOT_DIR / cleaned).resolve()
+        else:
+            out = (DATA_DIR / cleaned).resolve()
+
+    out.parent.mkdir(parents=True, exist_ok=True)
+    return out
 
 # Initialize FastAPI Application
 app = FastAPI(
@@ -221,7 +293,8 @@ def run_ingestion(req: IngestRequest):
         # Verify C++ binary existence; compile if needed
         if not CORE_INGEST_BIN.exists():
             compile_res = subprocess.run(
-                ["make", "-C", str(PROJECT_ROOT / "core_ingestion"), "all"],
+                ["make", "-C", str(ROOT_DIR / "core_ingestion"), "all"],
+                cwd=str(ROOT_DIR),
                 capture_output=True,
                 text=True,
             )
@@ -233,29 +306,28 @@ def run_ingestion(req: IngestRequest):
                     content={"detail": err_msg, "error": err_msg, "success": False},
                 )
 
-        # Resolve input path
-        input_file = Path(req.input_path)
-        if not input_file.is_absolute():
-            input_file = PROJECT_ROOT / input_file
-
+        # Resolve input path to strict absolute path
+        input_file = resolve_file_path(req.input_path, RAW_DIR)
         if not input_file.exists():
-            err_msg = f"Input GeoTIFF not found: {req.input_path}"
+            err_msg = f"Input GeoTIFF not found: {req.input_path} (Resolved to: {input_file})"
             print(f"[API ERROR] {err_msg}", file=sys.stderr)
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={"detail": err_msg, "error": err_msg, "success": False},
             )
 
-        # Resolve output directory
-        out_dir = Path(req.output_dir)
-        if not out_dir.is_absolute():
-            out_dir = PROJECT_ROOT / out_dir
+        # Resolve output directory to strict absolute path
+        if req.output_dir:
+            p_out = Path(req.output_dir)
+            out_dir = p_out.resolve() if p_out.is_absolute() else (ROOT_DIR / req.output_dir).resolve()
+        else:
+            out_dir = TILES_DIR.resolve()
         out_dir.mkdir(parents=True, exist_ok=True)
 
         cmd = [
-            str(CORE_INGEST_BIN),
-            str(input_file),
-            "-o", str(out_dir),
+            str(CORE_INGEST_BIN.resolve()),
+            str(input_file.resolve()),
+            "-o", str(out_dir.resolve()),
             "-s", str(req.chunk_size),
         ]
         if req.dry_run:
@@ -264,7 +336,7 @@ def run_ingestion(req: IngestRequest):
         start_time = time.time()
         res = subprocess.run(
             cmd,
-            cwd=str(PROJECT_ROOT),
+            cwd=str(ROOT_DIR.resolve()),
             capture_output=True,
             text=True,
         )
@@ -284,7 +356,7 @@ def run_ingestion(req: IngestRequest):
             success=True,
             message=f"Successfully sliced raster into {len(created_tiles)} chunks.",
             elapsed_seconds=round(elapsed, 3),
-            output_dir=str(out_dir.relative_to(PROJECT_ROOT)),
+            output_dir=str(out_dir.relative_to(ROOT_DIR)),
             chunks_created=created_tiles,
             log_output=res.stdout,
         )
@@ -312,55 +384,50 @@ def run_matching(req: MatchRequest):
     Returns verified homography, inlier statistics, and 3D lunar geographic projection coordinates.
     """
     try:
-        tile_a = Path(req.tile_a)
-        if not tile_a.is_absolute():
-            tile_a = PROJECT_ROOT / tile_a
-
-        tile_b = Path(req.tile_b)
-        if not tile_b.is_absolute():
-            tile_b = PROJECT_ROOT / tile_b
+        # Strict absolute path resolution for tile inputs
+        tile_a = resolve_file_path(req.tile_a, TILES_DIR)
+        tile_b = resolve_file_path(req.tile_b, TILES_DIR)
 
         if not tile_a.exists():
-            err_msg = f"Reference tile (Tile A) not found: {req.tile_a}"
+            err_msg = f"Reference tile (Tile A) not found: {req.tile_a} (Resolved to: {tile_a})"
             print(f"[API ERROR] {err_msg}", file=sys.stderr)
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={"detail": err_msg, "error": err_msg, "success": False},
             )
         if not tile_b.exists():
-            err_msg = f"Target tile (Tile B) not found: {req.tile_b}"
+            err_msg = f"Target tile (Tile B) not found: {req.tile_b} (Resolved to: {tile_b})"
             print(f"[API ERROR] {err_msg}", file=sys.stderr)
             return JSONResponse(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 content={"detail": err_msg, "error": err_msg, "success": False},
             )
 
-        out_viz = Path(req.output_viz)
-        if not out_viz.is_absolute():
-            out_viz = PROJECT_ROOT / out_viz
-        out_viz.parent.mkdir(parents=True, exist_ok=True)
-
-        out_json = Path(req.output_json)
-        if not out_json.is_absolute():
-            out_json = PROJECT_ROOT / out_json
-        out_json.parent.mkdir(parents=True, exist_ok=True)
+        # Strict absolute path resolution for outputs
+        out_viz = resolve_output_path(req.output_viz, DEFAULT_VIZ_PNG)
+        out_json = resolve_output_path(req.output_json, DEFAULT_METRICS_JSON)
 
         cmd = [
             str(PYTHON_BIN),
-            str(MATCHER_SCRIPT),
-            "--tile-a", str(tile_a),
-            "--tile-b", str(tile_b),
-            "--output-viz", str(out_viz),
-            "--output-json", str(out_json),
+            str(MATCHER_SCRIPT.resolve()),
+            "--tile-a", str(tile_a.resolve()),
+            "--tile-b", str(tile_b.resolve()),
+            "--output-viz", str(out_viz.resolve()),
+            "--output-json", str(out_json.resolve()),
             "--reproj-thresh", str(req.reproj_thresh),
             "--max-kpts", str(req.max_kpts),
             "--device", req.device,
         ]
 
+        sub_env = os.environ.copy()
+        sub_env["VIRTUAL_ENV"] = str(ROOT_DIR / "sih_env")
+        sub_env["PATH"] = f"{ROOT_DIR / 'sih_env' / 'bin'}:{sub_env.get('PATH', '')}"
+
         start_time = time.time()
         res = subprocess.run(
             cmd,
-            cwd=str(PROJECT_ROOT),
+            cwd=str(ROOT_DIR.resolve()),
+            env=sub_env,
             capture_output=True,
             text=True,
         )
@@ -393,8 +460,17 @@ def run_matching(req: MatchRequest):
                 content={"detail": err_msg, "error": err_msg, "success": False},
             )
 
-        viz_url = f"/static/{out_viz.name}" if out_viz.exists() else None
-        metrics_url = f"/static/{out_json.name}" if out_json.exists() else None
+        try:
+            rel_viz = out_viz.relative_to(DATA_DIR)
+            viz_url = f"/static/{rel_viz.as_posix()}" if out_viz.exists() else None
+        except ValueError:
+            viz_url = f"/static/{out_viz.name}" if out_viz.exists() else None
+
+        try:
+            rel_json = out_json.relative_to(DATA_DIR)
+            metrics_url = f"/static/{rel_json.as_posix()}" if out_json.exists() else None
+        except ValueError:
+            metrics_url = f"/static/{out_json.name}" if out_json.exists() else None
 
         # Simulated lunar coordinates for Chandrayaan-2 TMC-2 coverage region
         # (e.g., Boguslawsky Crater / South Pole-Aitken Basin exploration zone)
