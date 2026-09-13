@@ -10,6 +10,7 @@
 !/ai_matching/
 !/dashboard/
 !/data/
+!/scripts/
 !/run_pipeline.sh
 !/.gitignore
 !/README.md
