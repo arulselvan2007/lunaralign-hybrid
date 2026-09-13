@@ -11,6 +11,7 @@ import sys
 import json
 import time
 import shutil
+import traceback
 import subprocess
 from pathlib import Path
 from typing import Optional, List, Dict, Any
@@ -18,6 +19,7 @@ from typing import Optional, List, Dict, Any
 from fastapi import FastAPI, HTTPException, UploadFile, File, Form, status
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 # Project Root Resolution
@@ -209,198 +211,260 @@ def list_raw_images() -> List[Dict[str, Any]]:
     return results
 
 
-@app.post("/api/ingest", response_model=IngestResponse, tags=["Pipeline"])
-def run_ingestion(req: IngestRequest) -> IngestResponse:
+@app.post("/api/ingest", tags=["Pipeline"])
+def run_ingestion(req: IngestRequest):
     """
     Execute the C++ memory-safe GDAL windowed slicing engine.
     Splits large lunar satellite scenes into 1024x1024 chunks with bounded RAM.
     """
-    # Verify C++ binary existence; compile if needed
-    if not CORE_INGEST_BIN.exists():
-        compile_res = subprocess.run(
-            ["make", "-C", str(PROJECT_ROOT / "core_ingestion"), "all"],
+    try:
+        # Verify C++ binary existence; compile if needed
+        if not CORE_INGEST_BIN.exists():
+            compile_res = subprocess.run(
+                ["make", "-C", str(PROJECT_ROOT / "core_ingestion"), "all"],
+                capture_output=True,
+                text=True,
+            )
+            if compile_res.returncode != 0 or not CORE_INGEST_BIN.exists():
+                err_msg = f"Failed to build core_ingestion binary:\n{compile_res.stderr or compile_res.stdout}"
+                print(f"[API ERROR] {err_msg}", file=sys.stderr)
+                return JSONResponse(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    content={"detail": err_msg, "error": err_msg, "success": False},
+                )
+
+        # Resolve input path
+        input_file = Path(req.input_path)
+        if not input_file.is_absolute():
+            input_file = PROJECT_ROOT / input_file
+
+        if not input_file.exists():
+            err_msg = f"Input GeoTIFF not found: {req.input_path}"
+            print(f"[API ERROR] {err_msg}", file=sys.stderr)
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"detail": err_msg, "error": err_msg, "success": False},
+            )
+
+        # Resolve output directory
+        out_dir = Path(req.output_dir)
+        if not out_dir.is_absolute():
+            out_dir = PROJECT_ROOT / out_dir
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            str(CORE_INGEST_BIN),
+            str(input_file),
+            "-o", str(out_dir),
+            "-s", str(req.chunk_size),
+        ]
+        if req.dry_run:
+            cmd.append("--dry-run")
+
+        start_time = time.time()
+        res = subprocess.run(
+            cmd,
+            cwd=str(PROJECT_ROOT),
             capture_output=True,
             text=True,
         )
-        if compile_res.returncode != 0 or not CORE_INGEST_BIN.exists():
-            raise HTTPException(
+        elapsed = time.time() - start_time
+
+        if res.returncode != 0:
+            err_msg = f"C++ Ingestion Engine error (exit code {res.returncode}):\n{res.stderr or res.stdout}"
+            print(f"[API ERROR] {err_msg}", file=sys.stderr)
+            return JSONResponse(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                detail=f"Failed to build core_ingestion binary:\n{compile_res.stderr}",
+                content={"detail": err_msg, "error": err_msg, "success": False},
             )
 
-    # Resolve input path
-    input_file = Path(req.input_path)
-    if not input_file.is_absolute():
-        input_file = PROJECT_ROOT / input_file
+        created_tiles = [p.name for p in sorted(out_dir.glob("chunk_*.tif"))]
 
-    if not input_file.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Input GeoTIFF not found: {req.input_path}",
+        return IngestResponse(
+            success=True,
+            message=f"Successfully sliced raster into {len(created_tiles)} chunks.",
+            elapsed_seconds=round(elapsed, 3),
+            output_dir=str(out_dir.relative_to(PROJECT_ROOT)),
+            chunks_created=created_tiles,
+            log_output=res.stdout,
         )
-
-    # Resolve output directory
-    out_dir = Path(req.output_dir)
-    if not out_dir.is_absolute():
-        out_dir = PROJECT_ROOT / out_dir
-    out_dir.mkdir(parents=True, exist_ok=True)
-
-    cmd = [
-        str(CORE_INGEST_BIN),
-        str(input_file),
-        "-o", str(out_dir),
-        "-s", str(req.chunk_size),
-    ]
-    if req.dry_run:
-        cmd.append("--dry-run")
-
-    start_time = time.time()
-    res = subprocess.run(
-        cmd,
-        cwd=str(PROJECT_ROOT),
-        capture_output=True,
-        text=True,
-    )
-    elapsed = time.time() - start_time
-
-    if res.returncode != 0:
-        raise HTTPException(
+    except HTTPException as he:
+        print(f"[API HTTP_EXCEPTION] Status {he.status_code}: {he.detail}", file=sys.stderr)
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=he.status_code,
+            content={"detail": str(he.detail), "error": str(he.detail), "success": False},
+        )
+    except Exception as e:
+        print(f"[API UNHANDLED_EXCEPTION] Ingestion failed: {e}", file=sys.stderr)
+        traceback.print_exc()
+        err_msg = f"Ingestion server error: {str(e)}"
+        return JSONResponse(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"C++ Ingestion Engine error:\n{res.stderr or res.stdout}",
+            content={"detail": err_msg, "error": err_msg, "traceback": traceback.format_exc(), "success": False},
         )
 
-    created_tiles = [p.name for p in sorted(out_dir.glob("chunk_*.tif"))]
 
-    return IngestResponse(
-        success=True,
-        message=f"Successfully sliced raster into {len(created_tiles)} chunks.",
-        elapsed_seconds=round(elapsed, 3),
-        output_dir=str(out_dir.relative_to(PROJECT_ROOT)),
-        chunks_created=created_tiles,
-        log_output=res.stdout,
-    )
-
-
-@app.post("/api/match", response_model=MatchResponse, tags=["Pipeline"])
-def run_matching(req: MatchRequest) -> MatchResponse:
+@app.post("/api/match", tags=["Pipeline"])
+def run_matching(req: MatchRequest):
     """
     Execute AI feature extraction (LightGlue) and geometric verification (USAC_MAGSAC).
     Returns verified homography, inlier statistics, and 3D lunar geographic projection coordinates.
     """
-    tile_a = Path(req.tile_a)
-    if not tile_a.is_absolute():
-        tile_a = PROJECT_ROOT / tile_a
-
-    tile_b = Path(req.tile_b)
-    if not tile_b.is_absolute():
-        tile_b = PROJECT_ROOT / tile_b
-
-    if not tile_a.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Tile A not found: {req.tile_a}",
-        )
-    if not tile_b.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail=f"Tile B not found: {req.tile_b}",
-        )
-
-    out_viz = Path(req.output_viz)
-    if not out_viz.is_absolute():
-        out_viz = PROJECT_ROOT / out_viz
-    out_viz.parent.mkdir(parents=True, exist_ok=True)
-
-    out_json = Path(req.output_json)
-    if not out_json.is_absolute():
-        out_json = PROJECT_ROOT / out_json
-    out_json.parent.mkdir(parents=True, exist_ok=True)
-
-    cmd = [
-        str(PYTHON_BIN),
-        str(MATCHER_SCRIPT),
-        "--tile-a", str(tile_a),
-        "--tile-b", str(tile_b),
-        "--output-viz", str(out_viz),
-        "--output-json", str(out_json),
-        "--reproj-thresh", str(req.reproj_thresh),
-        "--max-kpts", str(req.max_kpts),
-        "--device", req.device,
-    ]
-
-    start_time = time.time()
-    res = subprocess.run(
-        cmd,
-        cwd=str(PROJECT_ROOT),
-        capture_output=True,
-        text=True,
-    )
-    elapsed = time.time() - start_time
-
-    if not out_json.exists():
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Matcher failed to produce metrics output:\n{res.stderr or res.stdout}",
-        )
-
     try:
-        with open(out_json, "r") as f:
-            metrics = json.load(f)
-    except Exception as ex:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Error parsing metrics.json: {ex}",
+        tile_a = Path(req.tile_a)
+        if not tile_a.is_absolute():
+            tile_a = PROJECT_ROOT / tile_a
+
+        tile_b = Path(req.tile_b)
+        if not tile_b.is_absolute():
+            tile_b = PROJECT_ROOT / tile_b
+
+        if not tile_a.exists():
+            err_msg = f"Reference tile (Tile A) not found: {req.tile_a}"
+            print(f"[API ERROR] {err_msg}", file=sys.stderr)
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"detail": err_msg, "error": err_msg, "success": False},
+            )
+        if not tile_b.exists():
+            err_msg = f"Target tile (Tile B) not found: {req.tile_b}"
+            print(f"[API ERROR] {err_msg}", file=sys.stderr)
+            return JSONResponse(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                content={"detail": err_msg, "error": err_msg, "success": False},
+            )
+
+        out_viz = Path(req.output_viz)
+        if not out_viz.is_absolute():
+            out_viz = PROJECT_ROOT / out_viz
+        out_viz.parent.mkdir(parents=True, exist_ok=True)
+
+        out_json = Path(req.output_json)
+        if not out_json.is_absolute():
+            out_json = PROJECT_ROOT / out_json
+        out_json.parent.mkdir(parents=True, exist_ok=True)
+
+        cmd = [
+            str(PYTHON_BIN),
+            str(MATCHER_SCRIPT),
+            "--tile-a", str(tile_a),
+            "--tile-b", str(tile_b),
+            "--output-viz", str(out_viz),
+            "--output-json", str(out_json),
+            "--reproj-thresh", str(req.reproj_thresh),
+            "--max-kpts", str(req.max_kpts),
+            "--device", req.device,
+        ]
+
+        start_time = time.time()
+        res = subprocess.run(
+            cmd,
+            cwd=str(PROJECT_ROOT),
+            capture_output=True,
+            text=True,
         )
+        elapsed = time.time() - start_time
 
-    viz_url = f"/static/{out_viz.name}" if out_viz.exists() else None
-    metrics_url = f"/static/{out_json.name}" if out_json.exists() else None
+        if res.returncode != 0:
+            err_msg = f"AI Matcher process exited with code {res.returncode}:\n{res.stderr or res.stdout}"
+            print(f"[API ERROR] {err_msg}", file=sys.stderr)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"detail": err_msg, "error": err_msg, "success": False},
+            )
 
-    # Simulated lunar coordinates for Chandrayaan-2 TMC-2 coverage region
-    # (e.g., Boguslawsky Crater / South Pole-Aitken Basin exploration zone)
-    lunar_coords = {
-        "target_region": "Boguslawsky Crater / Lunar South Pole",
-        "center_lat": -72.9,
-        "center_lon": 43.2,
-        "bounding_box": {
-            "west": 42.5,
-            "south": -73.5,
-            "east": 43.9,
-            "north": -72.3,
-        },
-        "elevation_m": -1850.0,
-        "projection": "Lunar IAU2000 Sphere / Equirectangular",
-    }
+        if not out_json.exists():
+            err_msg = f"Matcher failed to produce metrics output JSON:\n{res.stderr or res.stdout}"
+            print(f"[API ERROR] {err_msg}", file=sys.stderr)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"detail": err_msg, "error": err_msg, "success": False},
+            )
 
-    return MatchResponse(
-        success=metrics.get("success", False),
-        num_tentative=metrics.get("num_tentative", 0),
-        num_inliers=metrics.get("num_inliers", 0),
-        inlier_ratio=round(metrics.get("inlier_ratio", 0.0), 4),
-        mean_reprojection_error=(
-            round(metrics["mean_reprojection_error"], 4)
-            if metrics.get("mean_reprojection_error") is not None
-            else None
-        ),
-        homography=metrics.get("homography"),
-        viz_url=viz_url,
-        metrics_url=metrics_url,
-        reason=metrics.get("reason", "Registration evaluated."),
-        elapsed_seconds=round(elapsed, 3),
-        simulated_lunar_coords=lunar_coords,
-    )
+        try:
+            with open(out_json, "r") as f:
+                metrics = json.load(f)
+        except Exception as ex:
+            err_msg = f"Error parsing metrics.json: {ex}"
+            print(f"[API ERROR] {err_msg}", file=sys.stderr)
+            return JSONResponse(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                content={"detail": err_msg, "error": err_msg, "success": False},
+            )
+
+        viz_url = f"/static/{out_viz.name}" if out_viz.exists() else None
+        metrics_url = f"/static/{out_json.name}" if out_json.exists() else None
+
+        # Simulated lunar coordinates for Chandrayaan-2 TMC-2 coverage region
+        # (e.g., Boguslawsky Crater / South Pole-Aitken Basin exploration zone)
+        lunar_coords = {
+            "target_region": "Boguslawsky Crater / Lunar South Pole",
+            "center_lat": -72.9,
+            "center_lon": 43.2,
+            "bounding_box": {
+                "west": 42.5,
+                "south": -73.5,
+                "east": 43.9,
+                "north": -72.3,
+            },
+            "elevation_m": -1850.0,
+            "projection": "Lunar IAU2000 Sphere / Equirectangular",
+        }
+
+        return MatchResponse(
+            success=metrics.get("success", False),
+            num_tentative=metrics.get("num_tentative", 0),
+            num_inliers=metrics.get("num_inliers", 0),
+            inlier_ratio=round(metrics.get("inlier_ratio", 0.0), 4),
+            mean_reprojection_error=(
+                round(metrics["mean_reprojection_error"], 4)
+                if metrics.get("mean_reprojection_error") is not None
+                else None
+            ),
+            homography=metrics.get("homography"),
+            viz_url=viz_url,
+            metrics_url=metrics_url,
+            reason=metrics.get("reason", "Registration evaluated."),
+            elapsed_seconds=round(elapsed, 3),
+            simulated_lunar_coords=lunar_coords,
+        )
+    except HTTPException as he:
+        print(f"[API HTTP_EXCEPTION] Status {he.status_code}: {he.detail}", file=sys.stderr)
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=he.status_code,
+            content={"detail": str(he.detail), "error": str(he.detail), "success": False},
+        )
+    except Exception as e:
+        print(f"[API UNHANDLED_EXCEPTION] Matching failed: {e}", file=sys.stderr)
+        traceback.print_exc()
+        err_msg = f"Matching server error: {str(e)}"
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": err_msg, "error": err_msg, "traceback": traceback.format_exc(), "success": False},
+        )
 
 
 @app.get("/api/metrics", tags=["Pipeline"])
-def get_latest_metrics() -> Dict[str, Any]:
+def get_latest_metrics():
     """Retrieve the latest MAGSAC+ registration metrics and homography matrix."""
-    metrics_file = DATA_DIR / "metrics.json"
-    if not metrics_file.exists():
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="No registration metrics found. Run /api/match first.",
+    try:
+        metrics_file = DATA_DIR / "metrics.json"
+        if not metrics_file.exists():
+            return JSONResponse(
+                status_code=status.HTTP_404_NOT_FOUND,
+                content={"detail": "No registration metrics found. Run /api/match first.", "error": "Metrics file not found"},
+            )
+        with open(metrics_file, "r") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[API UNHANDLED_EXCEPTION] Metrics retrieval failed: {e}", file=sys.stderr)
+        traceback.print_exc()
+        return JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": f"Error retrieving metrics: {str(e)}", "error": str(e)},
         )
-    with open(metrics_file, "r") as f:
-        return json.load(f)
 
 
 @app.post("/api/upload", tags=["Imagery"])

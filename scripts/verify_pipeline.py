@@ -160,15 +160,23 @@ def main():
         success(f"FastAPI /api/raw-images returned {len(raw_list)} scenes")
 
         cur_metrics = get_latest_metrics()
-        assert cur_metrics["success"] is True
+        if hasattr(cur_metrics, "status_code"):
+            assert cur_metrics.status_code == 200
+        else:
+            assert cur_metrics["success"] is True
         success("FastAPI /api/metrics returned verified registration telemetry")
+
+        # Verify error handling returns JSONResponse with 400
+        err_res = run_matching(MatchRequest(tile_a="non_existent_tile.tif", tile_b="non_existent_tile.tif"))
+        assert hasattr(err_res, "status_code") and err_res.status_code == 400
+        success("FastAPI /api/match error handling returns clean status 400 JSONResponse without throwing 500")
 
     # Step 5: Web Application Assets & Build Verification
     step("5. Verifying 3D Mission Control (Next.js) Assets & Build")
-    moon_base_jpg = PROJECT_ROOT / "web_app" / "public" / "textures" / "moon_base.jpg"
-    if not moon_base_jpg.exists():
-        fail(f"Lunar base texture missing: {moon_base_jpg}")
-    success(f"High-resolution lunar globe texture verified ({moon_base_jpg.stat().st_size / (1024*1024):.2f} MB)")
+    moon_global_jpg = PROJECT_ROOT / "web_app" / "public" / "textures" / "moon_global.jpg"
+    if not moon_global_jpg.exists():
+        fail(f"Official lunar global texture missing: {moon_global_jpg}")
+    success(f"Official global Moon texture verified: {moon_global_jpg.name} ({moon_global_jpg.stat().st_size / 1024:.1f} KB)")
 
     landmarks_file = PROJECT_ROOT / "web_app" / "src" / "data" / "lunarLandmarks.ts"
     if not landmarks_file.exists():

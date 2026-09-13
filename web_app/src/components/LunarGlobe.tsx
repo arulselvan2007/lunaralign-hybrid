@@ -137,49 +137,14 @@ export default function LunarGlobe({
         viewer.imageryLayers.removeAll();
 
         // 2. Attach High-Resolution Global Lunar Imagery & Shaded Relief
-        // Layer A: Immediate High-Res Global Texture (NASA LROC WAC Morphologic Mosaic)
-        const localTextureUrl = "/textures/moon_base.jpg";
-        const cdnTextureUrl =
-          "https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/moon_1024.jpg";
-
-        const globalMoonBase = new Cesium.SingleTileImageryProvider({
-          url: localTextureUrl,
-          rectangle: Cesium.Rectangle.fromDegrees(-180.0, -90.0, 180.0, 90.0),
-          ellipsoid: moonEllipsoid,
-          credit: "NASA / GSFC / Arizona State University (LROC WAC Global Mosaic)",
+        // Load official open-source local global Moon texture with zero network latency
+        const lunarImageryProvider = new Cesium.SingleTileImageryProvider({
+          url: '/textures/moon_global.jpg',
+          rectangle: Cesium.Rectangle.fromDegrees(-180, -90, 180, 90),
         });
-        const baseLayer = viewer.imageryLayers.addImageryProvider(globalMoonBase);
-
-        // Layer B: NASA / USGS Web Map Service (WMS) for dynamic multi-resolution zoom
-        try {
-          const usgsWmsProvider = new Cesium.WebMapServiceImageryProvider({
-            url: "https://planetarymaps.usgs.gov/cgi-bin/mapserv?map=/maps/earth/moon_simp_cyl.map",
-            layers: "LUNAR_WAC",
-            parameters: {
-              format: "image/png",
-              transparent: "true",
-            },
-            ellipsoid: moonEllipsoid,
-            credit: "USGS Astrogeology / NASA LROC Global Shaded Relief",
-          });
-          viewer.imageryLayers.addImageryProvider(usgsWmsProvider);
-        } catch (wmsErr) {
-          console.warn("USGS WMS secondary layer optional fallback:", wmsErr);
-        }
-
-        // Layer C: NASA Solar System Treks LROC Tile Provider
-        try {
-          const nasaTrekProvider = new Cesium.UrlTemplateImageryProvider({
-            url: "https://trek.nasa.gov/tiles/Moon/EQ/LRO_WAC_Mosaic_Global_303ppd_v02/1.0.0/default/default028mm/{z}/{y}/{x}.jpg",
-            rectangle: Cesium.Rectangle.fromDegrees(-180.0, -90.0, 180.0, 90.0),
-            ellipsoid: moonEllipsoid,
-            credit: "NASA Moon Trek / Lunar QuickMap / ASU LROC",
-            maximumLevel: 7,
-          });
-          viewer.imageryLayers.addImageryProvider(nasaTrekProvider);
-        } catch (trekErr) {
-          console.warn("NASA Moon Trek tile provider optional fallback:", trekErr);
-        }
+        viewer.imageryLayers.removeAll();
+        viewer.imageryLayers.addImageryProvider(lunarImageryProvider);
+        viewer.scene.globe.enableLighting = true;
 
         // 3. Camera Initial View & Smooth FlyTo (South Pole / Statio Shiv Shakti @ 3,000 km altitude)
         // Global Framing view: 7,000 km looking at Southern Hemisphere

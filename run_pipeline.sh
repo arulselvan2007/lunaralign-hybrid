@@ -158,6 +158,15 @@ if [[ "${GDAL_FOUND}" = false ]]; then
     log_warn "GDAL not detected in standard system paths."
 fi
 
+# Ensure official NASA global Moon texture is injected for CesiumJS
+GLOBAL_TEXTURE="${WEB_APP_DIR}/public/textures/moon_global.jpg"
+if [[ ! -f "${GLOBAL_TEXTURE}" ]]; then
+    log_info "Injecting official open-source global Moon texture for CesiumJS..."
+    "${PY_EXEC}" "${PROJECT_ROOT}/scripts/download_moon_texture.py"
+else
+    log_success "Global Moon texture verified: ${GLOBAL_TEXTURE}"
+fi
+
 # ------------------------------------------------------------------------------
 # 2. Compile Core Ingestion (C++)
 # ------------------------------------------------------------------------------
