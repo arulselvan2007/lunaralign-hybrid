@@ -8,12 +8,21 @@
 /*
 !/core_ingestion/
 !/ai_matching/
-!/dashboard/
+!/api/
+!/web_app/
 !/data/
 !/scripts/
 !/run_pipeline.sh
 !/.gitignore
 !/README.md
+
+# Web & Node dependencies
+web_app/node_modules/
+web_app/.next/
+web_app/out/
+web_app/build/
+.next/
+node_modules/
 
 # ------------------------------------------------------------------------------
 # Large Geospatial Data & Imagery
