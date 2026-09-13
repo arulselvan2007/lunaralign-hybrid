@@ -22,6 +22,8 @@ data/raw/*
 !data/raw/.gitkeep
 data/tiles/*
 !data/tiles/.gitkeep
+data/*.png
+data/*.json
 *.tif
 *.tiff
 *.geotiff
