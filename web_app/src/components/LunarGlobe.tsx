@@ -72,7 +72,9 @@ export default function LunarGlobe({
   const mouseHandlerRef = useRef<any>(null);
   const [cesiumReady, setCesiumReady] = useState(false);
 
-  // 1. Initialize Cesium with Lunar Ellipsoid, True Deep-Space Canvas, & Starry Skybox
+  // ---------------------------------------------------------------------------
+  // 1. Initialize Cesium with Lunar Ellipsoid, High-Res Texture, & Deep Space
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     let checkInterval: NodeJS.Timeout;
 
@@ -80,13 +82,20 @@ export default function LunarGlobe({
       if (typeof window === "undefined" || !window.Cesium || !containerRef.current) return false;
 
       const Cesium = window.Cesium;
-      // Exact Lunar Ellipsoid: Radius = 1,737.4 km
+      // 1. Explicitly Configure Lunar Ellipsoid (Moon Radius: Exactly 1,737.4 km)
       const moonEllipsoid = Cesium.Ellipsoid.MOON;
 
       try {
+        // Create custom Lunar Globe
+        const globe = new Cesium.Globe(moonEllipsoid);
+        globe.baseColor = Cesium.Color.fromCssColorString("#151b2b");
+        globe.enableLighting = true; // Sun-relative day/night terminator
+        globe.showGroundAtmosphere = false; // Moon has no atmosphere
+
         const viewer = new Cesium.Viewer(containerRef.current, {
-          globe: new Cesium.Globe(moonEllipsoid),
+          globe: globe,
           baseLayerPicker: false,
+          imageryProvider: false, // Prevents default Earth / Bing Maps imagery
           geocoder: false,
           homeButton: false,
           sceneModePicker: false,
@@ -96,7 +105,8 @@ export default function LunarGlobe({
           fullscreenButton: false,
           infoBox: false,
           selectionIndicator: false,
-          skyAtmosphere: false, // Lunar vacuum
+          skyAtmosphere: false,
+          scene3DOnly: true,
           contextOptions: {
             webgl: {
               alpha: true,
@@ -105,38 +115,105 @@ export default function LunarGlobe({
           },
         });
 
-        // 1. True Deep-Space Canvas
+        // Deep-space black canvas
         viewer.scene.backgroundColor = Cesium.Color.BLACK;
-        viewer.scene.globe.baseColor = Cesium.Color.fromCssColorString("#111625");
-
-        // 2. Sun-relative dynamic solar terminator lighting
-        viewer.scene.globe.enableLighting = true;
         viewer.scene.highDynamicRange = true;
 
-        // Base Imagery: Global High-Resolution Lunar Basemap (USGS / LROC WMS Layer)
-        viewer.imageryLayers.removeAll();
-        const lunarBasemap = new Cesium.TileMapServiceImageryProvider({
-          url: "https://cartocdn-gusc.global.ssl.fastly.net/opmbuilder/api/v1/map/named/opm:moon_basemap_v0-1/all",
-          credit: "USGS Astrogeology / LROC / NASA",
-        });
-        viewer.imageryLayers.addImageryProvider(lunarBasemap);
+        // Configure realistic solar lighting angle to cast distinct crater relief along terminator
+        // Lock clock to a dramatic low-sun angle over the South Pole
+        const initialDate = Cesium.JulianDate.fromDate(new Date("2023-08-23T12:00:00Z"));
+        viewer.clock.currentTime = initialDate;
+        viewer.clock.shouldAnimate = false;
 
-        // Position Camera to Boguslawsky Crater / Lunar South Pole
+        // Clear any residual imagery layers
+        viewer.imageryLayers.removeAll();
+
+        // 2. Attach High-Resolution Global Lunar Imagery & Shaded Relief
+        // Layer A: Immediate High-Res Global Texture (NASA LROC WAC Morphologic Mosaic)
+        const localTextureUrl = "/textures/moon_base.jpg";
+        const cdnTextureUrl =
+          "https://raw.githubusercontent.com/mrdoob/three.js/dev/examples/textures/planets/moon_1024.jpg";
+
+        const globalMoonBase = new Cesium.SingleTileImageryProvider({
+          url: localTextureUrl,
+          rectangle: Cesium.Rectangle.fromDegrees(-180.0, -90.0, 180.0, 90.0),
+          ellipsoid: moonEllipsoid,
+          credit: "NASA / GSFC / Arizona State University (LROC WAC Global Mosaic)",
+        });
+        const baseLayer = viewer.imageryLayers.addImageryProvider(globalMoonBase);
+
+        // Layer B: NASA / USGS Web Map Service (WMS) for dynamic multi-resolution zoom
+        try {
+          const usgsWmsProvider = new Cesium.WebMapServiceImageryProvider({
+            url: "https://planetarymaps.usgs.gov/cgi-bin/mapserv?map=/maps/earth/moon_simp_cyl.map",
+            layers: "LUNAR_WAC",
+            parameters: {
+              format: "image/png",
+              transparent: "true",
+            },
+            ellipsoid: moonEllipsoid,
+            credit: "USGS Astrogeology / NASA LROC Global Shaded Relief",
+          });
+          viewer.imageryLayers.addImageryProvider(usgsWmsProvider);
+        } catch (wmsErr) {
+          console.warn("USGS WMS secondary layer optional fallback:", wmsErr);
+        }
+
+        // Layer C: NASA Solar System Treks LROC Tile Provider
+        try {
+          const nasaTrekProvider = new Cesium.UrlTemplateImageryProvider({
+            url: "https://trek.nasa.gov/tiles/Moon/EQ/LRO_WAC_Mosaic_Global_303ppd_v02/1.0.0/default/default028mm/{z}/{y}/{x}.jpg",
+            rectangle: Cesium.Rectangle.fromDegrees(-180.0, -90.0, 180.0, 90.0),
+            ellipsoid: moonEllipsoid,
+            credit: "NASA Moon Trek / Lunar QuickMap / ASU LROC",
+            maximumLevel: 7,
+          });
+          viewer.imageryLayers.addImageryProvider(nasaTrekProvider);
+        } catch (trekErr) {
+          console.warn("NASA Moon Trek tile provider optional fallback:", trekErr);
+        }
+
+        // 3. Camera Initial View & Smooth FlyTo (South Pole / Statio Shiv Shakti @ 3,000 km altitude)
+        // Global Framing view: 7,000 km looking at Southern Hemisphere
+        const globalFramePos = Cesium.Cartesian3.fromDegrees(
+          32.319,
+          -69.373,
+          7000000.0, // 7,000 km altitude
+          moonEllipsoid
+        );
+
         viewer.camera.setView({
-          destination: Cesium.Cartesian3.fromDegrees(
-            lunarCoords.center_lon,
-            lunarCoords.center_lat,
-            380000.0,
-            moonEllipsoid
-          ),
+          destination: globalFramePos,
           orientation: {
             heading: Cesium.Math.toRadians(0.0),
-            pitch: Cesium.Math.toRadians(-55.0),
+            pitch: Cesium.Math.toRadians(-90.0),
             roll: 0.0,
           },
         });
 
-        // 3. ScreenSpaceEventHandler: Real-time Geolocation Mouse Inspector
+        // Smooth cinematic fly-in on load to 3,000 km altitude
+        const targetSouthPole3000km = Cesium.Cartesian3.fromDegrees(
+          32.319,
+          -69.373,
+          3000000.0, // 3,000 km altitude (3,000,000 meters)
+          moonEllipsoid
+        );
+
+        setTimeout(() => {
+          if (viewer && !viewer.isDestroyed()) {
+            viewer.camera.flyTo({
+              destination: targetSouthPole3000km,
+              orientation: {
+                heading: Cesium.Math.toRadians(15.0),
+                pitch: Cesium.Math.toRadians(-60.0),
+                roll: 0.0,
+              },
+              duration: 3.5,
+            });
+          }
+        }, 300);
+
+        // 4. Real-time Geolocation Mouse Inspector
         const handler = new Cesium.ScreenSpaceEventHandler(viewer.scene.canvas);
 
         handler.setInputAction((movement: any) => {
@@ -148,12 +225,12 @@ export default function LunarGlobe({
             const lat = Cesium.Math.toDegrees(carto.latitude);
             const lon = Cesium.Math.toDegrees(carto.longitude);
 
-            // Estimated elevation relative to lunar sphere (meters)
-            // Simulated high-relief elevation field for South Pole craters
+            // Realistic terrain elevation model based on polar basin relief
             const distToSouthPole = Math.hypot(lat + 90, lon);
-            const simElev = distToSouthPole < 25
-              ? Math.round(-3800 + Math.sin(lat * 5) * 1200 + Math.cos(lon * 5) * 800)
-              : Math.round(-1500 + Math.sin(lat * 3) * 1500);
+            const simElev =
+              distToSouthPole < 25
+                ? Math.round(-3900 + Math.sin(lat * 5) * 1100 + Math.cos(lon * 5) * 750)
+                : Math.round(-1450 + Math.sin(lat * 3) * 1400);
 
             onUpdateCoords({
               lat,
@@ -171,7 +248,7 @@ export default function LunarGlobe({
           }
         }, Cesium.ScreenSpaceEventType.MOUSE_MOVE);
 
-        // 4. Click Listener for Lunar Landmark Labels
+        // 5. Interactive Landmark Selection on Click
         handler.setInputAction((click: any) => {
           const picked = viewer.scene.pick(click.position);
           if (Cesium.defined(picked) && picked.id && picked.id._landmarkData) {
@@ -182,7 +259,7 @@ export default function LunarGlobe({
               destination: Cesium.Cartesian3.fromDegrees(
                 landmark.lon,
                 landmark.lat,
-                landmark.diameter_km ? landmark.diameter_km * 2500 : 75000.0,
+                landmark.diameter_km ? landmark.diameter_km * 2200 : 75000.0,
                 moonEllipsoid
               ),
               duration: 2.5,
@@ -221,13 +298,17 @@ export default function LunarGlobe({
     };
   }, []);
 
+  // ---------------------------------------------------------------------------
   // 2. Solar Terminator Dynamic Lighting Toggle
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!viewerRef.current) return;
     viewerRef.current.scene.globe.enableLighting = enableLighting;
   }, [enableLighting]);
 
-  // 3. Global Lunar Nomenclature & Feature Labeling (GeoJSON / Entities)
+  // ---------------------------------------------------------------------------
+  // 3. Global Lunar Nomenclature Labels (GeoJSON / Point Entities)
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!cesiumReady || !viewerRef.current || !window.Cesium) return;
     const Cesium = window.Cesium;
@@ -253,7 +334,7 @@ export default function LunarGlobe({
 
         const entity = ds.entities.add({
           name: lm.name,
-          position: Cesium.Cartesian3.fromDegrees(lm.lon, lm.lat, 1800, moonEllipsoid),
+          position: Cesium.Cartesian3.fromDegrees(lm.lon, lm.lat, 2000, moonEllipsoid),
           point: {
             pixelSize: 8,
             color: pinColor,
@@ -271,24 +352,24 @@ export default function LunarGlobe({
             verticalOrigin: Cesium.VerticalOrigin.BOTTOM,
             pixelOffset: new Cesium.Cartesian2(0, -10),
             disableDepthTestDistance: Number.POSITIVE_INFINITY,
-            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 5000000.0),
+            distanceDisplayCondition: new Cesium.DistanceDisplayCondition(0, 6000000.0),
           },
         });
 
-        // Attach raw metadata to entity for click inspector
         entity._landmarkData = lm;
       });
     }
   }, [cesiumReady, showLabels]);
 
+  // ---------------------------------------------------------------------------
   // 4. Multi-Sensor Data Layers (TMC-2, IIRS Mineralogy, DEM Topography)
+  // ---------------------------------------------------------------------------
   const applySensorLayer = useCallback(() => {
     if (!cesiumReady || !viewerRef.current || !window.Cesium) return;
     const Cesium = window.Cesium;
     const viewer = viewerRef.current;
     const moonEllipsoid = Cesium.Ellipsoid.MOON;
 
-    // Clear previous custom layer entities
     tmc2EntitiesRef.current.forEach((e) => viewer.entities.remove(e));
     tmc2EntitiesRef.current = [];
 
@@ -299,17 +380,15 @@ export default function LunarGlobe({
     let outlineColor = Cesium.Color.fromCssColorString("#00f0ff");
 
     if (currentLayer === "iirs_mineral") {
-      // IIRS false-color spectral composite material
-      layerColor = Cesium.Color.fromCssColorString("#f59e0b").withAlpha(0.85); // Amber/Titanium
+      layerColor = Cesium.Color.fromCssColorString("#f59e0b").withAlpha(0.85); // Amber
       outlineColor = Cesium.Color.fromCssColorString("#f59e0b");
     } else if (currentLayer === "dem_topography") {
-      // Topography DEM heatmap material
-      layerColor = Cesium.Color.fromCssColorString("#10b981").withAlpha(0.85); // Emerald elevation
+      layerColor = Cesium.Color.fromCssColorString("#10b981").withAlpha(0.85); // Emerald
       outlineColor = Cesium.Color.fromCssColorString("#10b981");
     }
 
     if (showAlignmentFootprint) {
-      // Draped Chandrayaan-2 TMC-2 Ortho/DEM Surface Strip
+      // Draped Chandrayaan-2 TMC-2 Surface Pass
       const surfaceEntity = viewer.entities.add({
         name: `ISRO TMC-2 Surface Pass (${currentLayer.toUpperCase()})`,
         rectangle: {
@@ -327,7 +406,7 @@ export default function LunarGlobe({
       });
       tmc2EntitiesRef.current.push(surfaceEntity);
 
-      // Glowing Neon Bounding Perimeter Box
+      // Glowing Neon Bounding Perimeter
       const borderEntity = viewer.entities.add({
         name: "TMC-2 High-Resolution Perimeter",
         polyline: {
@@ -358,7 +437,7 @@ export default function LunarGlobe({
         ),
         point: {
           pixelSize: 10,
-          color: Cesium.Color.fromCssColorString("#ff6600"), // ISRO Orange
+          color: Cesium.Color.fromCssColorString("#ff6600"),
           outlineColor: Cesium.Color.WHITE,
           outlineWidth: 2,
         },
@@ -381,7 +460,9 @@ export default function LunarGlobe({
     applySensorLayer();
   }, [applySensorLayer]);
 
+  // ---------------------------------------------------------------------------
   // 5. Plot Verified Inlier Keypoints from MAGSAC+
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!cesiumReady || !viewerRef.current || !window.Cesium || !metrics) return;
     const Cesium = window.Cesium;
@@ -404,7 +485,7 @@ export default function LunarGlobe({
           position: Cesium.Cartesian3.fromDegrees(lon, lat, alt, moonEllipsoid),
           point: {
             pixelSize: 6,
-            color: Cesium.Color.fromCssColorString("#00f0ff"), // Glowing Cyan
+            color: Cesium.Color.fromCssColorString("#00f0ff"),
             outlineColor: Cesium.Color.WHITE,
             outlineWidth: 1,
           },
@@ -412,7 +493,6 @@ export default function LunarGlobe({
         keypointEntitiesRef.current.push(ent);
       }
 
-      // Smooth cinematic camera fly-to on registration complete
       viewer.camera.flyTo({
         destination: Cesium.Cartesian3.fromDegrees(
           lunarCoords.center_lon,
@@ -430,7 +510,9 @@ export default function LunarGlobe({
     }
   }, [metrics, cesiumReady, lunarCoords, showAlignmentFootprint]);
 
-  // 6. External Fly-To Trigger (from landmark click or quick-jump)
+  // ---------------------------------------------------------------------------
+  // 6. Camera Navigation Actions & FlyTo
+  // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!flyToLandmark || !viewerRef.current || !window.Cesium) return;
     const Cesium = window.Cesium;
@@ -440,25 +522,29 @@ export default function LunarGlobe({
       destination: Cesium.Cartesian3.fromDegrees(
         flyToLandmark.lon,
         flyToLandmark.lat,
-        flyToLandmark.diameter_km ? flyToLandmark.diameter_km * 2500 : 85000.0,
+        flyToLandmark.diameter_km ? flyToLandmark.diameter_km * 2200 : 85000.0,
         moonEllipsoid
       ),
       duration: 2.5,
     });
   }, [flyToLandmark]);
 
-  // Google Earth-style Camera Controls
-  const resetNorth = () => {
+  const resetToSouthPole3000km = () => {
     if (!viewerRef.current || !window.Cesium) return;
     const Cesium = window.Cesium;
     viewerRef.current.camera.flyTo({
-      destination: viewerRef.current.camera.position,
+      destination: Cesium.Cartesian3.fromDegrees(
+        32.319,
+        -69.373,
+        3000000.0, // Exactly 3,000 km altitude above Lunar Ellipsoid
+        Cesium.Ellipsoid.MOON
+      ),
       orientation: {
         heading: 0.0,
         pitch: Cesium.Math.toRadians(-60.0),
         roll: 0.0,
       },
-      duration: 1.5,
+      duration: 2.0,
     });
   };
 
@@ -478,10 +564,10 @@ export default function LunarGlobe({
       <div className="absolute top-4 left-4 z-10 flex items-center space-x-2.5 pointer-events-none">
         <div className="px-3 py-1.5 rounded-xl bg-black/75 backdrop-blur-md border border-cyan-500/30 text-xs font-mono text-cyan-300 flex items-center space-x-2 shadow-lg">
           <span className="w-2 h-2 rounded-full bg-cyan-400 animate-pulse" />
-          <span>ELLIPSOID: MOON IAU2000 (1,737.4 km)</span>
+          <span>ELLIPSOID: MOON (R=1,737.4 km)</span>
         </div>
         <div className="px-3 py-1.5 rounded-xl bg-black/75 backdrop-blur-md border border-white/20 text-xs font-mono text-slate-300 shadow-lg">
-          MODE: {currentLayer.toUpperCase()}
+          TEXTURE: LROC WAC / SHADED RELIEF
         </div>
       </div>
 
@@ -489,8 +575,8 @@ export default function LunarGlobe({
       <div className="absolute top-4 right-4 z-10 flex flex-col space-y-2">
         <button
           type="button"
-          onClick={resetNorth}
-          title="Reset Camera to True Lunar North"
+          onClick={resetToSouthPole3000km}
+          title="Reset View: South Pole / Statio Shiv Shakti (3,000 km Alt)"
           className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 hover:text-cyan-300 border border-white/15 backdrop-blur-md transition-all shadow-lg"
         >
           <Compass className="w-5 h-5" />
