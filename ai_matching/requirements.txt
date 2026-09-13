@@ -1,0 +1,9 @@
+# Core Deep Learning & Computer Vision Stack for LunarAlign-Hybrid
+torch>=2.0.0
+torchvision>=0.15.0
+kornia>=0.7.0
+opencv-python>=4.7.0
+numpy>=1.23.0
+
+# Optional Visualization & Geospatial Utilities
+matplotlib>=3.7.0
