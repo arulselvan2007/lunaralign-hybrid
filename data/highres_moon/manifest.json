@@ -1,0 +1,137 @@
+{
+  "title": "LunarAlign-Hybrid Local High-Resolution Lunar Mosaic & Tile Bank",
+  "generated_timestamp": 1789323279.706709,
+  "storage_mode": "Offline Local NVMe Streaming",
+  "fastapi_mount": "/static/lunar_hires/",
+  "global_mosaic": {
+    "file": "lunar_global_hires.jpg",
+    "url": "/static/lunar_hires/lunar_global_hires.jpg",
+    "resolution": "4096x2048",
+    "projection": "Lunar IAU2000 Equirectangular",
+    "bit_depth": "8-bit sRGB"
+  },
+  "normal_map": {
+    "file": "moon_normal.jpg",
+    "url": "/static/lunar_hires/moon_normal.jpg",
+    "resolution": "2048x1024",
+    "projection": "Lunar IAU2000 Equirectangular",
+    "format": "Tangent-space RGB (R=X, G=Y, B=Z)"
+  },
+  "landmark_patches": [
+    {
+      "id": "statio_shiv_shakti",
+      "title": "Statio Shiv Shakti (Chandrayaan-3)",
+      "file": "tiles/statio_shiv_shakti_hires.jpg",
+      "url": "/static/lunar_hires/tiles/statio_shiv_shakti_hires.jpg",
+      "lat": -69.373,
+      "lon": 32.319,
+      "resolution": "2048x2048"
+    },
+    {
+      "id": "boguslawsky",
+      "title": "Boguslawsky Crater South Pole",
+      "file": "tiles/boguslawsky_hires.jpg",
+      "url": "/static/lunar_hires/tiles/boguslawsky_hires.jpg",
+      "lat": -72.9,
+      "lon": 43.2,
+      "resolution": "2048x2048"
+    },
+    {
+      "id": "shackleton",
+      "title": "Shackleton Crater Polar Cold Trap",
+      "file": "tiles/shackleton_hires.jpg",
+      "url": "/static/lunar_hires/tiles/shackleton_hires.jpg",
+      "lat": -89.9,
+      "lon": 0.0,
+      "resolution": "2048x2048"
+    },
+    {
+      "id": "tycho_crater",
+      "title": "Tycho Crater Central Peak",
+      "file": "tiles/tycho_crater_hires.jpg",
+      "url": "/static/lunar_hires/tiles/tycho_crater_hires.jpg",
+      "lat": -43.3,
+      "lon": -11.2,
+      "resolution": "2048x2048"
+    },
+    {
+      "id": "copernicus",
+      "title": "Copernicus Terraced Crater",
+      "file": "tiles/copernicus_hires.jpg",
+      "url": "/static/lunar_hires/tiles/copernicus_hires.jpg",
+      "lat": 9.62,
+      "lon": -20.08,
+      "resolution": "2048x2048"
+    },
+    {
+      "id": "oceanus_procellarum",
+      "title": "Oceanus Procellarum Basin",
+      "file": "tiles/oceanus_procellarum_hires.jpg",
+      "url": "/static/lunar_hires/tiles/oceanus_procellarum_hires.jpg",
+      "lat": 18.4,
+      "lon": -57.4,
+      "resolution": "2048x2048"
+    },
+    {
+      "id": "mare_tranquillitatis",
+      "title": "Mare Tranquillitatis",
+      "file": "tiles/mare_tranquillitatis_hires.jpg",
+      "url": "/static/lunar_hires/tiles/mare_tranquillitatis_hires.jpg",
+      "lat": 8.5,
+      "lon": 31.4,
+      "resolution": "2048x2048"
+    },
+    {
+      "id": "spa_basin",
+      "title": "South Pole-Aitken Basin",
+      "file": "tiles/spa_basin_hires.jpg",
+      "url": "/static/lunar_hires/tiles/spa_basin_hires.jpg",
+      "lat": -53.0,
+      "lon": -169.0,
+      "resolution": "2048x2048"
+    },
+    {
+      "id": "aristarchus",
+      "title": "Aristarchus Plateau",
+      "file": "tiles/aristarchus_hires.jpg",
+      "url": "/static/lunar_hires/tiles/aristarchus_hires.jpg",
+      "lat": 23.7,
+      "lon": -47.4,
+      "resolution": "2048x2048"
+    }
+  ],
+  "sensor_layers": [
+    {
+      "layer_id": "ohrc_framing",
+      "title": "OHRC High-Resolution Framing",
+      "pixel_scale": "0.25 m/pixel",
+      "description": "High-contrast panchromatic grayscale with sub-meter boulder fields, micro-craters, and razor-sharp shadow-casting rim boundaries.",
+      "file": "tiles/ohrc_submeter_patch.jpg",
+      "url": "/static/lunar_hires/tiles/ohrc_submeter_patch.jpg"
+    },
+    {
+      "layer_id": "tmc2_ortho",
+      "title": "TMC-2 Stereo Regional Ortho",
+      "pixel_scale": "5.0 m/pixel",
+      "description": "DEM hillshade + hypsometric elevation tint (blue -> green -> brown -> white) representing regional stereo macro-topography.",
+      "file": "tiles/tmc2_regional_ortho_patch.jpg",
+      "url": "/static/lunar_hires/tiles/tmc2_regional_ortho_patch.jpg"
+    },
+    {
+      "layer_id": "iirs_mineral",
+      "title": "IIRS Mineralogy Spectroscopic Map",
+      "spectral_range": "0.8 - 5.0 um",
+      "description": "Vivid false-color composite with saturated band ratios: intense cyan/blue (hydroxyl/water-ice absorption in cold traps), bright orange/red (Fe2+/Ti basaltic volcanism), and lime green (feldspathic anorthositic highlands).",
+      "file": "tiles/iirs_mineral_patch.jpg",
+      "url": "/static/lunar_hires/tiles/iirs_mineral_patch.jpg"
+    },
+    {
+      "layer_id": "dem_topography",
+      "title": "DEM Topography Elevation Heatmap",
+      "instrument": "LOLA Hypsometric Heatmap",
+      "description": "LOLA hypsometric elevation colormap from deep basin floors (-9,000m) to high crater rims (+8,000m).",
+      "file": "tiles/dem_elevation_patch.jpg",
+      "url": "/static/lunar_hires/tiles/dem_elevation_patch.jpg"
+    }
+  ]
+}

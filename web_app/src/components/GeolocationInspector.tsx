@@ -45,7 +45,7 @@ export default function GeolocationInspector({
   return (
     <div className="flex flex-col space-y-3">
       {/* Real-time Cursor Coordinates HUD */}
-      <div className="rounded-2xl p-3.5 backdrop-blur-md bg-white/10 border border-white/20 shadow-xl flex flex-wrap items-center justify-between gap-4 font-mono text-xs">
+      <div className="rounded-2xl p-3.5 backdrop-blur-xl bg-white/10 border border-white/20 shadow-xl flex flex-wrap items-center justify-between gap-4 font-mono text-xs">
         {/* Latitude */}
         <div className="flex items-center space-x-2">
           <Crosshair className="w-4 h-4 text-cyan-400 animate-spin-slow" />
@@ -96,7 +96,7 @@ export default function GeolocationInspector({
       </div>
 
       {/* Quick-Jump Lunar Landmark Rail */}
-      <div className="rounded-2xl p-3 backdrop-blur-md bg-black/40 border border-white/10 shadow-lg">
+      <div className="rounded-2xl p-3 backdrop-blur-xl bg-black/40 border border-white/10 shadow-lg">
         <div className="flex items-center justify-between mb-2 px-1">
           <div className="flex items-center space-x-1.5 text-xs font-mono text-slate-300">
             <MapPin className="w-3.5 h-3.5 text-cyan-400" />

@@ -15,15 +15,7 @@ export default function RootLayout({
   return (
     <html lang="en" className="dark">
       <head>
-        {/* CesiumJS 3D Planetary Engine */}
-        <link
-          rel="stylesheet"
-          href="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Widgets/widgets.css"
-        />
-        <Script
-          src="https://cesium.com/downloads/cesiumjs/releases/1.114/Build/Cesium/Cesium.js"
-          strategy="beforeInteractive"
-        />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
       </head>
       <body className="antialiased bg-lunar-950 text-slate-100 overflow-hidden">
         {children}

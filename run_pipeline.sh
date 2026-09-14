@@ -158,13 +158,22 @@ if [[ "${GDAL_FOUND}" = false ]]; then
     log_warn "GDAL not detected in standard system paths."
 fi
 
-# Ensure official NASA global Moon texture is injected for CesiumJS
+# Ensure official NASA global Moon texture is injected
 GLOBAL_TEXTURE="${WEB_APP_DIR}/public/textures/moon_global.jpg"
 if [[ ! -f "${GLOBAL_TEXTURE}" ]]; then
-    log_info "Injecting official open-source global Moon texture for CesiumJS..."
+    log_info "Injecting official open-source global Moon texture..."
     "${PY_EXEC}" "${PROJECT_ROOT}/scripts/download_moon_texture.py"
 else
     log_success "Global Moon texture verified: ${GLOBAL_TEXTURE}"
+fi
+
+# Ensure local offline 1.5-2 GB high-resolution lunar mosaic and tile archive exists
+HIRES_ARCHIVE="${PROJECT_ROOT}/data/highres_moon/lunar_global_hires.jpg"
+if [[ ! -f "${HIRES_ARCHIVE}" ]]; then
+    log_info "Initializing local offline 1.5-2 GB High-Resolution Lunar Mosaic & Tile Archive..."
+    "${PY_EXEC}" "${PROJECT_ROOT}/scripts/generate_lunar_hires_mosaic.py"
+else
+    log_success "Local high-res lunar mosaic archive verified: ${HIRES_ARCHIVE}"
 fi
 
 # ------------------------------------------------------------------------------
@@ -235,26 +244,44 @@ if [[ "${SERVE_WEB}" = true || ("${SKIP_WEB}" = false && -z "${INPUT_TIFF}") ]];
     log_info "Stage 3: Booting LunarAlign-Hybrid Full-Stack Platform"
     echo -e "-------------------------------------------------------"
 
+    FASTAPI_PID=""
+    NEXTJS_PID=""
+
     # Background processes cleanup handler on Ctrl+C / exit
     cleanup() {
+        trap - SIGINT SIGTERM EXIT
         echo -e "\n${YELLOW}[SHUTDOWN]${NC} Stopping FastAPI server and Next.js frontend..."
-        kill 0 2>/dev/null || true
-        wait 2>/dev/null || true
+        if [[ -n "${FASTAPI_PID:-}" ]] && kill -0 "${FASTAPI_PID}" 2>/dev/null; then
+            kill -TERM "${FASTAPI_PID}" 2>/dev/null || true
+        fi
+        if [[ -n "${NEXTJS_PID:-}" ]] && kill -0 "${NEXTJS_PID}" 2>/dev/null; then
+            kill -TERM "${NEXTJS_PID}" 2>/dev/null || true
+        fi
+        wait "${FASTAPI_PID:-}" 2>/dev/null || true
+        wait "${NEXTJS_PID:-}" 2>/dev/null || true
         log_success "All LunarAlign-Hybrid services stopped."
     }
     trap cleanup SIGINT SIGTERM EXIT
 
     # 1. Start FastAPI backend (port 8000)
-    log_info "Launching FastAPI backend server (http://127.0.0.1:8000)..."
-    "${PY_EXEC}" -m uvicorn api.main:app --host 0.0.0.0 --port 8000 &
+    log_info "Launching FastAPI backend server concurrently (http://127.0.0.1:8000)..."
+    (
+        export VIRTUAL_ENV="${PROJECT_ROOT}/sih_env"
+        export PATH="${PROJECT_ROOT}/sih_env/bin:${PATH}"
+        export PYTHONPATH="${PROJECT_ROOT}:${PYTHONPATH:-}"
+        exec "${PY_EXEC}" -m uvicorn api.main:app --host 0.0.0.0 --port 8000
+    ) &
     FASTAPI_PID=$!
 
-    # Wait briefly for FastAPI to bind
+    # Wait briefly for FastAPI socket binding
     sleep 2
 
     # 2. Start Next.js frontend (port 3000)
-    log_info "Launching Next.js 3D Lunar Globe Web App (http://localhost:3000)..."
-    (cd "${WEB_APP_DIR}" && npm run dev) &
+    log_info "Launching Next.js 3D Lunar Globe Web App concurrently (http://localhost:3000)..."
+    (
+        cd "${WEB_APP_DIR}"
+        exec npm run dev
+    ) &
     NEXTJS_PID=$!
 
     echo -e "\n======================================================="
@@ -266,7 +293,7 @@ if [[ "${SERVE_WEB}" = true || ("${SKIP_WEB}" = false && -z "${INPUT_TIFF}") ]];
     echo -e "======================================================="
     echo -e "Press ${BOLD}Ctrl+C${NC} to stop both services.\n"
 
-    # Wait for child processes
+    # Wait concurrently for child processes
     wait "${FASTAPI_PID}" "${NEXTJS_PID}"
 fi
 

@@ -12,7 +12,7 @@
 #   make GDAL_PREFIX=/opt/homebrew/opt/gdal
 # ==============================================================================
 
-CXX      ?= clang++
+CXX      ?= $(shell command -v g++ 2>/dev/null || command -v clang++ 2>/dev/null || echo c++)
 CXXFLAGS ?= -std=c++17 -O3 -Wall -Wextra
 
 TARGET   := ingest_geotiff
@@ -71,10 +71,13 @@ ifeq ($(strip $(GDAL_CFLAGS)),)
   else ifneq ($(wildcard /usr/local/include/gdal.h),)
     GDAL_CFLAGS := -I/usr/local/include
     GDAL_LIBS   := -L/usr/local/lib -lgdal
-  # MacPorts default path (/opt/local)
-  else ifneq ($(wildcard /opt/local/include/gdal.h),)
-    GDAL_CFLAGS := -I/opt/local/include
-    GDAL_LIBS   := -L/opt/local/lib -lgdal
+  # Linux Debian / Ubuntu system directories
+  else ifneq ($(wildcard /usr/include/gdal/gdal.h),)
+    GDAL_CFLAGS := -I/usr/include/gdal
+    GDAL_LIBS   := -lgdal
+  else ifneq ($(wildcard /usr/include/gdal.h),)
+    GDAL_CFLAGS := -I/usr/include
+    GDAL_LIBS   := -lgdal
   else
     # Fallback to Apple Silicon Homebrew default with runtime check
     GDAL_CFLAGS := -I/opt/homebrew/include

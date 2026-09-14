@@ -15,6 +15,9 @@
 !/run_pipeline.sh
 !/.gitignore
 !/README.md
+!/Dockerfile
+!/requirements.txt
+!/.dockerignore
 
 # Web & Node dependencies
 web_app/node_modules/

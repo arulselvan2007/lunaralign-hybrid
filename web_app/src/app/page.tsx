@@ -10,14 +10,15 @@ import TelemetryHUD from "@/components/TelemetryHUD";
 import LandmarkDetailDrawer from "@/components/LandmarkDetailDrawer";
 import { LunarLandmark } from "@/data/lunarLandmarks";
 import { Moon, Satellite, Sparkles, Terminal, Activity } from "lucide-react";
+import { getApiUrl, getAssetUrl } from "@/config/api";
 
-// Dynamically import LunarGlobe with ssr: false since Cesium requires window and WebGL
-const LunarGlobe = dynamic(() => import("@/components/LunarGlobe"), {
+// Dynamically import Three.js LunarGlobe with ssr: false (requires window & WebGL)
+const LunarGlobe = dynamic(() => import("@/components/ThreeLunarGlobe"), {
   ssr: false,
   loading: () => (
     <div className="w-full h-full min-h-[580px] rounded-2xl glass-panel flex flex-col items-center justify-center text-cyan-400 font-mono text-sm space-y-3">
       <div className="w-10 h-10 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-      <span>INITIALIZING CESIUMJS 3D LUNAR ENVIRONMENT...</span>
+      <span>INITIALIZING THREE.JS 3D LUNAR ENVIRONMENT...</span>
     </div>
   ),
 });
@@ -57,14 +58,17 @@ export default function LunarAlignMissionControl() {
   const [metrics, setMetrics] = useState<any | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [ingesting, setIngesting] = useState(false);
-  const [activeVizUrl, setActiveVizUrl] = useState<string | null>("/static/matches_visualization.png");
+  const [activeVizUrl, setActiveVizUrl] = useState<string | null>(getAssetUrl("/static/matches_visualization.png"));
+  const [alignmentResultUrl, setAlignmentResultUrl] = useState<string | null>(null);
+  const [uncertaintyMapUrl, setUncertaintyMapUrl] = useState<string | null>(null);
   const [backendOnline, setBackendOnline] = useState(false);
 
-  // Multi-Sensor & Visual Environment State
+  // Multi-Sensor & Visual Environment State (Realistic Solar Terminator default ON)
   const [currentLayer, setCurrentLayer] = useState<SensorLayerMode>("tmc2_ortho");
   const [enableLighting, setEnableLighting] = useState(true);
   const [showLabels, setShowLabels] = useState(true);
   const [showAlignmentFootprint, setShowAlignmentFootprint] = useState(true);
+  const [showUncertaintyMap, setShowUncertaintyMap] = useState(false);
 
   // Selected Landmark for Telemetry Drawer & Camera Fly-To
   const [selectedLandmark, setSelectedLandmark] = useState<LunarLandmark | null>(null);
@@ -99,21 +103,29 @@ export default function LunarAlignMissionControl() {
   // Fetch initial tiles and metrics from FastAPI backend
   const fetchBackendData = async () => {
     try {
-      const healthRes = await fetch("/api/health");
+      const healthRes = await fetch(getApiUrl("/api/health"));
       if (healthRes.ok) {
         setBackendOnline(true);
       }
 
-      const tilesRes = await fetch("/api/tiles");
+      const tilesRes = await fetch(getApiUrl("/api/tiles"));
       if (tilesRes.ok) {
         const data = await safeFetchJson(tilesRes);
         if (Array.isArray(data)) setTiles(data);
       }
 
-      const metricsRes = await fetch("/api/metrics");
+      const metricsRes = await fetch(getApiUrl("/api/metrics"));
       if (metricsRes.ok) {
         const data = await safeFetchJson(metricsRes);
         setMetrics(data);
+        if (data.warped_url || data.dem_warping?.warped_raster_url) {
+          const rawUrl = data.warped_url || data.dem_warping?.warped_raster_url;
+          setAlignmentResultUrl(`${getAssetUrl(rawUrl)}?t=${Date.now()}`);
+        }
+        if (data.heatmap_url || data.uncertainty?.heatmap_url) {
+          const rawUrl = data.heatmap_url || data.uncertainty?.heatmap_url;
+          setUncertaintyMapUrl(`${getAssetUrl(rawUrl)}?t=${Date.now()}`);
+        }
       }
     } catch (err) {
       setBackendOnline(false);
@@ -126,30 +138,45 @@ export default function LunarAlignMissionControl() {
     return () => clearInterval(interval);
   }, []);
 
-  // Trigger Matcher (LightGlue + USAC_MAGSAC)
+  // Handler for successful alignment (updates telemetry and draped 3D overlays)
+  const handleMatchSuccess = (matchData: any) => {
+    setMetrics(matchData);
+    if (matchData.viz_url) {
+      setActiveVizUrl(`${getAssetUrl(matchData.viz_url)}?t=${Date.now()}`);
+    }
+    if (matchData.warped_url || matchData.dem_warping?.warped_raster_url) {
+      const rawUrl = matchData.warped_url || matchData.dem_warping?.warped_raster_url;
+      setAlignmentResultUrl(`${getAssetUrl(rawUrl)}?t=${Date.now()}`);
+    }
+    if (matchData.heatmap_url || matchData.uncertainty?.heatmap_url) {
+      const rawUrl = matchData.heatmap_url || matchData.uncertainty?.heatmap_url;
+      setUncertaintyMapUrl(`${getAssetUrl(rawUrl)}?t=${Date.now()}`);
+    }
+    if (matchData.simulated_lunar_coords) {
+      setLunarCoords(matchData.simulated_lunar_coords);
+    }
+  };
+
+  // Trigger Matcher (LightGlue / RIFT2 / USAC_MAGSAC)
   const handleRunMatch = async (params: {
     tile_a: string;
     tile_b: string;
     reproj_thresh: number;
     max_kpts: number;
     device: string;
+    branch?: string;
+    sensor?: string;
   }) => {
     setIsLoading(true);
     try {
-      const res = await fetch("/api/match", {
+      const res = await fetch(getApiUrl("/api/match"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(params),
       });
 
       const matchData = await safeFetchJson(res);
-      setMetrics(matchData);
-      if (matchData.viz_url) {
-        setActiveVizUrl(`${matchData.viz_url}?t=${Date.now()}`);
-      }
-      if (matchData.simulated_lunar_coords) {
-        setLunarCoords(matchData.simulated_lunar_coords);
-      }
+      handleMatchSuccess(matchData);
     } catch (err: any) {
       alert(`Alignment error: ${err.message}`);
     } finally {
@@ -161,7 +188,7 @@ export default function LunarAlignMissionControl() {
   const handleRunIngest = async () => {
     setIngesting(true);
     try {
-      const res = await fetch("/api/ingest", {
+      const res = await fetch(getApiUrl("/api/ingest"), {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -184,7 +211,25 @@ export default function LunarAlignMissionControl() {
   // Landmark Selection Handlers
   const handleSelectLandmark = (landmark: LunarLandmark) => {
     setSelectedLandmark(landmark);
-    setFlyToTarget(landmark);
+    setFlyToTarget({ ...landmark });
+    const delta = landmark.diameter_km ? Math.max(0.6, landmark.diameter_km / 100) : 0.8;
+    setLunarCoords({
+      target_region: landmark.name,
+      center_lat: landmark.lat,
+      center_lon: landmark.lon,
+      bounding_box: {
+        west: landmark.lon - delta,
+        south: landmark.lat - delta,
+        east: landmark.lon + delta,
+        north: landmark.lat + delta,
+      },
+      elevation_m: landmark.elevation_m,
+    });
+    setCursorCoords({
+      lat: landmark.lat,
+      lon: landmark.lon,
+      elevation_m: landmark.elevation_m,
+    });
   };
 
   const handleUpdateCoords = (coords: {
@@ -250,7 +295,7 @@ export default function LunarAlignMissionControl() {
                 backendOnline ? "bg-emerald-400 animate-pulse" : "bg-amber-400"
               }`}
             />
-            <span>FASTAPI: {backendOnline ? "PORT 8000 ONLINE" : "CONNECTING..."}</span>
+            <span>CLOUD API: {backendOnline ? "TUNNEL ONLINE" : "CONNECTING..."}</span>
           </div>
         </div>
       </header>
@@ -261,8 +306,10 @@ export default function LunarAlignMissionControl() {
         <div className="w-full lg:w-[410px] flex-shrink-0 flex flex-col space-y-4 overflow-y-auto pr-1">
           <ControlPanel
             tiles={tiles}
+            onMatchSuccess={handleMatchSuccess}
             onRunMatch={handleRunMatch}
             onRunIngest={handleRunIngest}
+            onRefreshTiles={fetchBackendData}
             isLoading={isLoading}
             ingesting={ingesting}
           />
@@ -276,22 +323,27 @@ export default function LunarAlignMissionControl() {
             onToggleLabels={setShowLabels}
             showAlignmentFootprint={showAlignmentFootprint}
             onToggleAlignment={setShowAlignmentFootprint}
+            showUncertaintyMap={showUncertaintyMap}
+            onToggleUncertainty={setShowUncertaintyMap}
           />
         </div>
 
         {/* Right Side: 3D Lunar Globe, Geolocation Inspector, & Telemetry HUD */}
         <section className="flex-1 flex flex-col space-y-3 min-w-0 h-full overflow-y-auto pr-1">
-          {/* 3D Cesium Lunar Globe */}
+          {/* 3D Three.js Lunar Globe */}
           <div className="flex-1 min-h-[460px] relative">
             <LunarGlobe
               lunarCoords={lunarCoords}
               metrics={metrics}
               isLoading={isLoading}
               activeTileUrl={activeVizUrl}
+              alignmentResultUrl={alignmentResultUrl}
+              uncertaintyMapUrl={uncertaintyMapUrl}
               currentLayer={currentLayer}
               enableLighting={enableLighting}
               showLabels={showLabels}
               showAlignmentFootprint={showAlignmentFootprint}
+              showUncertaintyMap={showUncertaintyMap}
               onSelectLandmark={handleSelectLandmark}
               onUpdateCoords={handleUpdateCoords}
               flyToLandmark={flyToTarget}

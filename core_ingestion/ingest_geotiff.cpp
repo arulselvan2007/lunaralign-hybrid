@@ -25,6 +25,7 @@
 #include "gdal_priv.h"
 #include "cpl_conv.h"
 #include "cpl_string.h"
+#include "cpl_vsi.h"
 #include "ogr_spatialref.h"
 
 namespace fs = std::filesystem;
@@ -112,7 +113,8 @@ void printGeoTransform(const double adfGeoTransform[6], int nRasterXSize, int nR
 bool sliceGeoTIFF(GDALDataset *poSrcDS,
                   const std::string &outputDir,
                   int chunkSize,
-                  bool dryRun) {
+                  bool dryRun,
+                  int maxChunks = 0) {
     int nRasterXSize = poSrcDS->GetRasterXSize();
     int nRasterYSize = poSrcDS->GetRasterYSize();
     int nBands = poSrcDS->GetRasterCount();
@@ -129,6 +131,9 @@ bool sliceGeoTIFF(GDALDataset *poSrcDS,
     int numChunksX = (nRasterXSize + chunkSize - 1) / chunkSize;
     int numChunksY = (nRasterYSize + chunkSize - 1) / chunkSize;
     int totalChunks = numChunksX * numChunksY;
+    if (maxChunks > 0 && maxChunks < totalChunks) {
+        totalChunks = maxChunks;
+    }
 
     double ramPerChunkMB = (static_cast<double>(chunkSize) * chunkSize * bytesPerPixel * nBands) / (1024.0 * 1024.0);
 
@@ -139,7 +144,7 @@ bool sliceGeoTIFF(GDALDataset *poSrcDS,
     std::cout << "Bands Count:          " << nBands << "\n";
     std::cout << "Data Type:            " << GDALGetDataTypeName(eDataType) << " (" << bytesPerPixel << " bytes/sample)\n";
     std::cout << "Chunk Grid:           " << numChunksX << " columns x " << numChunksY << " rows\n";
-    std::cout << "Total Chunks:         " << totalChunks << "\n";
+    std::cout << "Total Chunks:         " << totalChunks << (maxChunks > 0 ? " (Bounded by --max-chunks)" : "") << "\n";
     std::cout << "Chunk Dimensions:     " << chunkSize << " x " << chunkSize << " px (max)\n";
     std::cout << "RAM per Chunk Buffer: ~" << std::fixed << std::setprecision(2) << ramPerChunkMB << " MB (bounded)\n";
     std::cout << "Output Directory:     " << outputDir << "\n";
@@ -173,10 +178,12 @@ bool sliceGeoTIFF(GDALDataset *poSrcDS,
     int processedCount = 0;
 
     for (int chunkY = 0; chunkY < numChunksY; ++chunkY) {
+        if (maxChunks > 0 && processedCount >= maxChunks) break;
         int yOff = chunkY * chunkSize;
         int actualBlockY = std::min(chunkSize, nRasterYSize - yOff);
 
         for (int chunkX = 0; chunkX < numChunksX; ++chunkX) {
+            if (maxChunks > 0 && processedCount >= maxChunks) break;
             int xOff = chunkX * chunkSize;
             int actualBlockX = std::min(chunkSize, nRasterXSize - xOff);
             processedCount++;
@@ -298,14 +305,17 @@ bool sliceGeoTIFF(GDALDataset *poSrcDS,
 
 void printUsage(const char *progName) {
     std::cout << "Usage:\n";
-    std::cout << "  " << progName << " <input_geotiff_path> [options]\n\n";
+    std::cout << "  " << progName << " <input_geotiff_path_or_url> [options]\n\n";
     std::cout << "Options:\n";
     std::cout << "  --output-dir, -o <path>   Directory to store chunk files (default: " << DEFAULT_OUTPUT_DIR << ")\n";
     std::cout << "  --chunk-size, -s <size>   Pixel dimensions for square chunks (default: " << DEFAULT_CHUNK_SIZE << ")\n";
+    std::cout << "  --max-chunks, -m <num>    Maximum number of chunks to slice (useful for remote /vsicurl/ streams)\n";
     std::cout << "  --dry-run, -d             Inspect CRS, extents, and simulate slicing without writing to disk\n";
     std::cout << "  --help, -h                Show this help message\n\n";
-    std::cout << "Example:\n";
+    std::cout << "Example (Local File):\n";
     std::cout << "  " << progName << " ../data/raw/lunar_pass1.tif -o ../data/tiles -s 1024\n";
+    std::cout << "Example (Cloud-Native VSI Stream):\n";
+    std::cout << "  " << progName << " /vsicurl/https://planetarymaps.usgs.gov/mosaic/Moon_LRO_LOLA_ClrShade_Global_128ppd_v04.tif -m 4\n";
 }
 
 int main(int argc, char *argv[]) {
@@ -317,6 +327,7 @@ int main(int argc, char *argv[]) {
     std::string inputPath = "";
     std::string outputDir = DEFAULT_OUTPUT_DIR;
     int chunkSize = DEFAULT_CHUNK_SIZE;
+    int maxChunks = 0;
     bool dryRun = false;
 
     // Parse command-line arguments
@@ -331,6 +342,12 @@ int main(int argc, char *argv[]) {
             chunkSize = std::stoi(argv[++i]);
             if (chunkSize <= 0) {
                 std::cerr << "Error: chunk-size must be a positive integer.\n";
+                return 1;
+            }
+        } else if ((arg == "--max-chunks" || arg == "-m") && i + 1 < argc) {
+            maxChunks = std::stoi(argv[++i]);
+            if (maxChunks <= 0) {
+                std::cerr << "Error: max-chunks must be a positive integer.\n";
                 return 1;
             }
         } else if (arg == "--dry-run" || arg == "-d") {
@@ -351,7 +368,7 @@ int main(int argc, char *argv[]) {
     }
 
     if (inputPath.empty()) {
-        std::cerr << "Error: Missing input GeoTIFF file.\n";
+        std::cerr << "Error: Missing input GeoTIFF file or URL.\n";
         printUsage(argv[0]);
         return 1;
     }
@@ -359,12 +376,45 @@ int main(int argc, char *argv[]) {
     // Initialize GDAL driver manager
     GDALAllRegister();
 
-    std::cout << "Opening GeoTIFF: " << inputPath << "\n";
+    // Enable Cloud-Native HTTP / VSI Streaming Optimizations
+    CPLSetConfigOption("GDAL_HTTP_TIMEOUT", "30");
+    CPLSetConfigOption("GDAL_HTTP_MAX_RETRY", "3");
+    CPLSetConfigOption("GDAL_HTTP_RETRY_DELAY", "2");
+    CPLSetConfigOption("GDAL_DISABLE_READDIR_ON_OPEN", "EMPTY_DIR");
+    CPLSetConfigOption("VSI_CACHE", "TRUE");
+    CPLSetConfigOption("VSI_CACHE_SIZE", "67108864");
+    CPLSetConfigOption("CPL_VSIL_CURL_ALLOWED_EXTENSIONS", ".tif,.tiff,.TIF,.TIFF,.vrt,.xml");
 
-    // Open dataset in read-only mode
+    // Auto-detect remote HTTP/HTTPS datasets and guarantee /vsicurl/ prefix
+    bool isRemote = (inputPath.rfind("/vsicurl/", 0) == 0 ||
+                     inputPath.rfind("http://", 0) == 0 ||
+                     inputPath.rfind("https://", 0) == 0 ||
+                     inputPath.rfind("ftp://", 0) == 0);
+
+    if (inputPath.rfind("http://", 0) == 0 || inputPath.rfind("https://", 0) == 0 || inputPath.rfind("ftp://", 0) == 0) {
+        inputPath = "/vsicurl/" + inputPath;
+        isRemote = true;
+    }
+
+    if (isRemote) {
+        std::cout << "\n=======================================================\n";
+        std::cout << "        CLOUD-NATIVE /VSICURL/ DIRECT STREAMING        \n";
+        std::cout << "=======================================================\n";
+        std::cout << "Remote Dataset URL: " << inputPath << "\n";
+        std::cout << "Streaming Mode:     HTTP Range Requests (Virtual File System)\n";
+        std::cout << "RAM Footprint:      Strict O(1) Windowed Memory Caching\n";
+        std::cout << "=======================================================\n\n";
+    } else {
+        std::cout << "Opening GeoTIFF: " << inputPath << "\n";
+    }
+
+    // Open dataset in read-only mode using GDALOpenEx with fallback to GDALOpen
     GDALDataset *poDataset = static_cast<GDALDataset *>(
-        GDALOpen(inputPath.c_str(), GA_ReadOnly)
+        GDALOpenEx(inputPath.c_str(), GDAL_OF_RASTER | GDAL_OF_READONLY | GDAL_OF_VERBOSE_ERROR, nullptr, nullptr, nullptr)
     );
+    if (poDataset == nullptr) {
+        poDataset = static_cast<GDALDataset *>(GDALOpen(inputPath.c_str(), GA_ReadOnly));
+    }
 
     if (poDataset == nullptr) {
         std::cerr << "Failed to open input GeoTIFF: " << inputPath << "\n";
@@ -387,7 +437,7 @@ int main(int argc, char *argv[]) {
     }
 
     // 3. Slice the image into chunks
-    bool success = sliceGeoTIFF(poDataset, outputDir, chunkSize, dryRun);
+    bool success = sliceGeoTIFF(poDataset, outputDir, chunkSize, dryRun, maxChunks);
 
     // Close dataset and cleanup
     GDALClose(poDataset);

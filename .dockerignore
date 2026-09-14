@@ -1,0 +1,21 @@
+# Local Virtual Environments & Caches
+sih_env/
+.venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.pytest_cache/
+
+# Frontend Node Modules & Next.js Build Artifacts
+web_app/node_modules/
+web_app/.next/
+web_app/out/
+
+# Git & System Files
+.git/
+.gitignore
+.DS_Store
+*.dSYM/
+core_ingestion/*.o
