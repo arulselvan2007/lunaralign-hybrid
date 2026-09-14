@@ -1,0 +1,33 @@
+# Dependencies
+node_modules/
+/.pnp
+.pnp.js
+
+# Next.js build and cache
+.next/
+out/
+build/
+
+# Environment files
+.env*
+!.env.example
+
+# Debug and logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# Python cache (if any local tooling runs)
+__pycache__/
+*.py[cod]
+
+# Vercel and IDE
+.vercel
+.vscode/
+.idea/
+
+# OS metadata
+.DS_Store
+*.pem
+*.tsbuildinfo
