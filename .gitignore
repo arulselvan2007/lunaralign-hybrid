@@ -13,6 +13,7 @@
 !/data/
 !/scripts/
 !/run_pipeline.sh
+!/sih_backend_tunnel.sh
 !/.gitignore
 !/README.md
 !/Dockerfile
