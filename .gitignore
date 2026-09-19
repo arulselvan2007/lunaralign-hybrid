@@ -14,6 +14,7 @@
 !/scripts/
 !/run_pipeline.sh
 !/sih_backend_tunnel.sh
+!/syntrix_precompute.py
 !/.gitignore
 !/README.md
 !/Dockerfile
