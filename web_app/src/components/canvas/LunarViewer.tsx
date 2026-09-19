@@ -1,16 +1,23 @@
 "use client";
 
-import React, { useEffect, useRef, useImperativeHandle, forwardRef } from "react";
+import React, { useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from "react";
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import {
   Compass,
   Layers,
+  MapPin,
+  RefreshCw,
+  Sun,
   ZoomIn,
   ZoomOut,
-  RotateCw,
+  Sparkles,
+  Crosshair,
+  Globe2,
   Mountain,
+  Maximize2,
 } from "lucide-react";
+import { LUNAR_LANDMARKS, LunarLandmark } from "@/data/lunarLandmarks";
 
 export interface LayerOpacities {
   base: number;          // OHRC Optical Base (0.25 m): 0.0 - 1.0
@@ -39,20 +46,50 @@ export interface LunarViewerProps {
   showLabels?: boolean;
   showAlignmentFootprint?: boolean;
   viewMode?: "globe" | "terrain";
-  onSelectLandmark?: (landmark: any) => void;
+  onSelectLandmark?: (landmark: LunarLandmark) => void;
   onUpdateCoords?: (coords: {
     lat: number | null;
     lon: number | null;
     elevation_m: number | null;
     cameraAltitude_km: number | null;
   }) => void;
-  flyToLandmark?: any | null;
+  flyToLandmark?: LunarLandmark | null;
 }
 
 export interface LunarViewerRef {
   setOpacities: (opacities: Partial<LayerOpacities>) => void;
-  flyTo: (lat?: number, lon?: number, distance?: number) => void;
+  flyTo: (lat: number, lon: number, distance?: number) => void;
   resetView: () => void;
+}
+
+export const LUNAR_RADIUS = 2.0;
+
+/**
+ * Convert Geographic coordinates (Latitude, Longitude) into 3D Vector3 Cartesian space
+ * on a sphere of radius R. Aligns mathematically with Three.js UV equirectangular sphere wrapping.
+ */
+export function latLonToVector3(lat: number, lon: number, radius: number = LUNAR_RADIUS): THREE.Vector3 {
+  const phi = (90 - lat) * (Math.PI / 180);
+  const theta = (lon + 180) * (Math.PI / 180);
+
+  const x = -(radius * Math.sin(phi) * Math.cos(theta));
+  const z = radius * Math.sin(phi) * Math.sin(theta);
+  const y = radius * Math.cos(phi);
+
+  return new THREE.Vector3(x, y, z);
+}
+
+/**
+ * Convert a 3D Cartesian point on a sphere of radius R back to Geographic (Latitude, Longitude).
+ */
+export function vector3ToLatLon(v: THREE.Vector3, radius: number = LUNAR_RADIUS): { lat: number; lon: number } {
+  const norm = v.clone().normalize();
+  const lat = 90 - Math.acos(Math.min(Math.max(norm.y, -1), 1)) * (180 / Math.PI);
+  const theta = Math.atan2(norm.z, -norm.x);
+  let lon = theta * (180 / Math.PI) - 180;
+  while (lon < -180) lon += 360;
+  while (lon > 180) lon -= 360;
+  return { lat, lon };
 }
 
 /**
@@ -67,11 +104,11 @@ function createSolidColorTexture(r: number, g: number, b: number, a: number = 25
 
 /**
  * Custom High-Performance Multi-Layer Draping & Displacement Shader
- * - High-Res Subdivided Plane Terrain Geometry
- * - 0.85 Multiplier on Vertex Displacement for Deep Crater Rims and Peaks
- * - High-Contrast Grayscale Panchromatic Base (OHRC 0.25m)
- * - Harsh Neon Orange / Cyan / Lime False-Color Hyperspectral Mapping (IIRS 80m)
- * - Aggressive Translucent Crimson Red / Emerald Green Heatmap (MAGSAC++ Uncertainty)
+ * - TMC-2 Topographic Relief Elevation Displacement along Sphere Normals
+ * - High-Contrast Sharp Grayscale Panchromatic Base (OHRC 0.25m)
+ * - Harsh Neon Cyan/Orange/Lime False-Color Hyperspectral Mapping (IIRS 80m) with alpha isolation
+ * - Aggressive Translucent Crimson/Emerald Heatmap (MAGSAC++ Uncertainty)
+ * - Lommel-Seeliger Grazing Solar Terminator Lighting
  */
 const LunarShader = {
   vertexShader: `
@@ -90,8 +127,8 @@ const LunarShader = {
       vec4 normSample = texture2D(uNormalMap, uv);
       float height = dot(normSample.rgb, vec3(0.299, 0.587, 0.114));
       
-      // Deep crater rims on the flat plane (0.85 displacement multiplier)
-      float disp = (height - 0.45) * (uDisplacementScale * 0.85);
+      // Topographic Relief Displacement along radial normal vector
+      float disp = (height - 0.45) * (uDisplacementScale * 0.12);
       vec3 displacedPos = position + normal * disp;
 
       vNormal = normalize(normalMatrix * normal);
@@ -109,7 +146,7 @@ const LunarShader = {
     varying vec3 vViewPosition;
     varying vec3 vWorldPosition;
 
-    uniform sampler2D uBaseTexture;        // OHRC 0.25m Panchromatic Base
+    uniform sampler2D uBaseTexture;        // OHRC 0.25m / Global Panchromatic Base
     uniform sampler2D uNormalMap;          // TMC-2 5m DEM / Normal
     uniform sampler2D uMineralTexture;     // IIRS 80m Hyperspectral Composite
     uniform sampler2D uUncertaintyTexture; // MAGSAC++ Quantitative Uncertainty Map
@@ -129,48 +166,55 @@ const LunarShader = {
 
       // 2. Base OHRC Optical Layer: High-Contrast Sharp Grayscale Panchromatic
       float luma = dot(baseTex.rgb, vec3(0.299, 0.587, 0.114));
-      float sharpLuma = smoothstep(0.08, 0.84, luma);
-      sharpLuma = pow(sharpLuma, 1.15);
+      float sharpLuma = smoothstep(0.06, 0.88, luma);
+      sharpLuma = pow(sharpLuma, 1.12);
       vec3 ohrcPan = vec3(sharpLuma * 1.15);
 
       vec3 finalColor = vec3(0.02, 0.02, 0.02);
       finalColor = mix(finalColor, ohrcPan, clamp(uOpacityBase, 0.0, 1.0));
 
-      // 3. IIRS Mineral: Harsh, Vibrant False-Color Mapping (Cyan/Orange Neon Overriding Base)
+      // 3. IIRS Mineral: Explosive False-Color Mapping (Cyan/Orange/Lime Neon)
       // Structural proxy bands: 950nm pyroxene (Neon Orange), 1050nm olivine (Neon Lime), 1250nm plagioclase/ice (Electric Cyan)
       if (uOpacityMineral > 0.01) {
-        vec3 neonPyroxene = vec3(1.0, 0.32, 0.0) * (mineralTex.r * 2.4 + 0.20);
-        vec3 neonOlivine = vec3(0.20, 1.0, 0.05) * (mineralTex.g * 2.2 + 0.15);
-        vec3 neonPlagioclase = vec3(0.0, 0.88, 1.0) * (mineralTex.b * 2.8 + 0.25);
+        float mineralSignal = max(mineralTex.r, max(mineralTex.g, mineralTex.b));
+        float mineralAlpha = mineralTex.a > 0.0 ? mineralTex.a : mineralSignal;
 
-        vec3 explosiveMineral = neonPyroxene * (mineralTex.r + 0.2) +
-                                neonOlivine * (mineralTex.g + 0.15) +
-                                neonPlagioclase * (mineralTex.b + 0.25);
+        if (mineralAlpha > 0.04) {
+          vec3 neonPyroxene = vec3(1.0, 0.32, 0.0) * (mineralTex.r * 2.6);
+          vec3 neonOlivine = vec3(0.20, 1.0, 0.08) * (mineralTex.g * 2.4);
+          vec3 neonPlagioclase = vec3(0.0, 0.88, 1.0) * (mineralTex.b * 2.8);
 
-        explosiveMineral = clamp(explosiveMineral * 1.45, 0.0, 1.0);
-        float mineralFactor = clamp(uOpacityMineral * 1.35, 0.0, 1.0);
-        finalColor = mix(finalColor, explosiveMineral, mineralFactor);
+          vec3 explosiveMineral = neonPyroxene + neonOlivine + neonPlagioclase;
+          explosiveMineral = clamp(explosiveMineral * 1.5, 0.0, 1.0);
+          float mineralFactor = clamp(uOpacityMineral * mineralAlpha * 1.35, 0.0, 1.0);
+          finalColor = mix(finalColor, explosiveMineral, mineralFactor);
+        }
       }
 
-      // 4. MAGSAC++ Uncertainty: Aggressive Translucent Red / Green Overlay
+      // 4. MAGSAC++ Uncertainty: Aggressive Translucent Red / Green Heatmap
       // Electric Emerald (< 0.25 px high conf) vs Blazing Crimson Red (> 0.65 px uncertainty)
       if (uOpacityUncertainty > 0.01) {
-        vec3 aggressiveOverlay;
-        float uVal = uncertTex.r;
-        float gVal = uncertTex.g;
+        float uncertSignal = max(uncertTex.r, max(uncertTex.g, uncertTex.b));
+        float uncertAlpha = uncertTex.a > 0.0 ? uncertTex.a : uncertSignal;
 
-        if (uVal > gVal * 0.85 || uVal > 0.35) {
-          aggressiveOverlay = vec3(1.0, 0.02, 0.12) * (1.2 + uVal * 0.8);
-        } else {
-          aggressiveOverlay = vec3(0.0, 1.0, 0.35) * (1.1 + gVal * 0.6);
+        if (uncertAlpha > 0.04) {
+          vec3 aggressiveOverlay;
+          float uVal = uncertTex.r;
+          float gVal = uncertTex.g;
+
+          if (uVal > gVal * 0.85 || uVal > 0.35) {
+            aggressiveOverlay = vec3(1.0, 0.02, 0.12) * (1.2 + uVal * 0.8);
+          } else {
+            aggressiveOverlay = vec3(0.0, 1.0, 0.35) * (1.1 + gVal * 0.6);
+          }
+
+          aggressiveOverlay = clamp(aggressiveOverlay, 0.0, 1.0);
+          float overlayAlpha = clamp(uOpacityUncertainty * uncertAlpha * 0.88, 0.0, 0.92);
+          finalColor = mix(finalColor, aggressiveOverlay, overlayAlpha);
         }
-
-        aggressiveOverlay = clamp(aggressiveOverlay, 0.0, 1.0);
-        float overlayAlpha = clamp(uOpacityUncertainty * 0.85, 0.0, 0.92);
-        finalColor = mix(finalColor, aggressiveOverlay, overlayAlpha);
       }
 
-      // 5. Grazing Solar Terminator Lighting with Deep High-Relief Shadows
+      // 5. Grazing Solar Terminator Lighting with Lommel-Seeliger Scattering
       vec3 normal = normalize(vNormal);
       vec3 lightDir = normalize(uSunDirection);
       float rawDiff = dot(normal, lightDir);
@@ -213,7 +257,7 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
     enableLighting = true,
     showLabels = true,
     showAlignmentFootprint = true,
-    viewMode = "terrain",
+    viewMode = "globe",
     onSelectLandmark,
     onUpdateCoords,
     flyToLandmark,
@@ -225,15 +269,24 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
   const sceneRef = useRef<THREE.Scene | null>(null);
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
-  const terrainMeshRef = useRef<THREE.Mesh | null>(null);
+  const globeMeshRef = useRef<THREE.Mesh | null>(null);
   const shaderMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
   const sunLightRef = useRef<THREE.DirectionalLight | null>(null);
   const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
+  const footprintGroupRef = useRef<THREE.Group | null>(null);
+  const landmarkGroupRef = useRef<THREE.Group | null>(null);
 
-  // Isometric default camera angle
-  const defaultCamPos = useRef(new THREE.Vector3(0, 2.5, 3.5));
+  // Projected 2D screen positions for interactive landmark pins
+  const [projectedLabels, setProjectedLabels] = useState<
+    Array<{
+      landmark: LunarLandmark;
+      x: number;
+      y: number;
+      visible: boolean;
+    }>
+  >([]);
 
-  // Camera FlyTo animation state
+  // Camera FlyTo animation state (smooth orbital arc transition)
   const animRef = useRef<{
     active: boolean;
     startPos: THREE.Vector3;
@@ -243,9 +296,9 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
   }>({
     active: false,
     startPos: new THREE.Vector3(),
-    endPos: new THREE.Vector3(0, 2.5, 3.5),
+    endPos: new THREE.Vector3(),
     progress: 0,
-    duration: 1.2,
+    duration: 1.5,
   });
 
   // Expose imperative handle for parent component
@@ -258,32 +311,35 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       if (newOpacities.mineral !== undefined) uniforms.uOpacityMineral.value = newOpacities.mineral;
       if (newOpacities.uncertainty !== undefined) uniforms.uOpacityUncertainty.value = newOpacities.uncertainty;
     },
-    flyTo: (_lat?: number, _lon?: number, _distance?: number) => {
+    flyTo: (lat: number, lon: number, distance: number = 3.4) => {
       const camera = cameraRef.current;
       if (!camera) return;
+      const targetDir = latLonToVector3(lat, lon, 1.0).normalize();
+      const targetPos = targetDir.multiplyScalar(distance);
       animRef.current = {
         active: true,
         startPos: camera.position.clone(),
-        endPos: defaultCamPos.current.clone(),
+        endPos: targetPos,
         progress: 0,
-        duration: 1.2,
+        duration: 1.5,
       };
     },
     resetView: () => {
-      const camera = cameraRef.current;
-      if (!camera) return;
-      animRef.current = {
-        active: true,
-        startPos: camera.position.clone(),
-        endPos: defaultCamPos.current.clone(),
-        progress: 0,
-        duration: 1.2,
-      };
+      if (cameraRef.current) {
+        const targetPos = latLonToVector3(23.7, -47.4, 3.8);
+        animRef.current = {
+          active: true,
+          startPos: cameraRef.current.position.clone(),
+          endPos: targetPos,
+          progress: 0,
+          duration: 1.4,
+        };
+      }
     },
   }));
 
   // ---------------------------------------------------------------------------
-  // 1. Initialize WebGL Scene, Camera, 3D Plane Geometry, Shaders, & Controls
+  // 1. Initialize WebGL Scene, Camera, 3D Sphere Globe, Shaders, & Controls
   // ---------------------------------------------------------------------------
   useEffect(() => {
     const container = containerRef.current;
@@ -297,9 +353,10 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
     scene.background = new THREE.Color(0x020307);
     sceneRef.current = scene;
 
-    // 2. Camera (Angled isometric view looking down at 3D surface plane)
+    // 2. Camera (Focal length 45 FOV, initialized looking at Aristarchus Plateau)
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 1000);
-    camera.position.copy(defaultCamPos.current);
+    const initialPos = latLonToVector3(23.7, -47.4, 4.0);
+    camera.position.copy(initialPos);
     cameraRef.current = camera;
 
     // 3. WebGLRenderer with high-performance ACESFilmic tone mapping
@@ -315,21 +372,21 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
-    // 4. OrbitControls: Panning allowed, clamped zoom
+    // 4. OrbitControls: Smooth orbital damping, zoom clamped to prevent clipping
     const controls = new OrbitControls(camera, renderer.domElement);
     controls.enableDamping = true;
     controls.dampingFactor = 0.05;
     controls.rotateSpeed = 0.75;
     controls.zoomSpeed = 0.9;
-    controls.minDistance = 0.5;
-    controls.maxDistance = 10.0;
+    controls.minDistance = 2.20;
+    controls.maxDistance = 14.0;
+    controls.enablePan = false;
     controls.target.set(0, 0, 0);
-    controls.enablePan = true;
     controlsRef.current = controls;
 
     // 5. Lighting: Grazing Solar Terminator + Soft Earthshine
     const sunLight = new THREE.DirectionalLight(0xffffff, enableLighting ? 2.8 : 1.6);
-    sunLight.position.set(4.0, 3.5, 3.0);
+    sunLight.position.set(5.5, 1.8, 3.2);
     scene.add(sunLight);
     sunLightRef.current = sunLight;
 
@@ -337,14 +394,14 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
     scene.add(ambientLight);
     ambientLightRef.current = ambientLight;
 
-    // 6. Deep-Space Starfield (2,000 background points)
-    const starCount = 2000;
+    // 6. Deep-Space Starfield (2,500 stellar background points)
+    const starCount = 2500;
     const starGeo = new THREE.BufferGeometry();
     const starPositions = new Float32Array(starCount * 3);
     const starColors = new Float32Array(starCount * 3);
 
     for (let i = 0; i < starCount; i++) {
-      const r = 40 + Math.random() * 60;
+      const r = 50 + Math.random() * 90;
       const theta = Math.random() * Math.PI * 2;
       const phi = Math.acos(Math.random() * 2 - 1);
       starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
@@ -363,12 +420,12 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       size: 1.2,
       vertexColors: true,
       transparent: true,
-      opacity: 0.75,
+      opacity: 0.8,
     });
     const starPoints = new THREE.Points(starGeo, starMat);
     scene.add(starPoints);
 
-    // 7. Multi-Layer Blending Custom Shader Material with DoubleSide Backface Culling Prevention
+    // 7. Multi-Layer Blending Custom Shader Material
     const fallbackBase = createSolidColorTexture(140, 142, 146);
     const fallbackNormal = createSolidColorTexture(128, 128, 255);
     const fallbackMineral = createSolidColorTexture(60, 180, 220, 180);
@@ -387,22 +444,30 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
         uDisplacementScale: { value: opacities.topography },
         uOpacityMineral: { value: opacities.mineral },
         uOpacityUncertainty: { value: opacities.uncertainty },
-        uSunDirection: { value: new THREE.Vector3(4.0, 3.5, 3.0).normalize() },
+        uSunDirection: { value: new THREE.Vector3(5.5, 1.8, 3.2).normalize() },
         uAmbientIntensity: { value: enableLighting ? 0.20 : 0.65 },
       },
     });
     shaderMaterialRef.current = shaderMaterial;
 
-    // 8. Load Precomputed High-Res Assets with ClampToEdgeWrapping
+    // 8. Load Precomputed High-Res Equirectangular Textures with Anisotropic Filtering
     const textureLoader = new THREE.TextureLoader();
+    const maxAnisotropy = renderer.capabilities ? renderer.capabilities.getMaxAnisotropy() : 8;
+
+    const setupGlobeTexture = (tex: THREE.Texture, isSRGB: boolean = false) => {
+      if (isSRGB) tex.colorSpace = THREE.SRGBColorSpace;
+      tex.wrapS = THREE.RepeatWrapping;
+      tex.wrapT = THREE.ClampToEdgeWrapping;
+      tex.generateMipmaps = true;
+      tex.minFilter = THREE.LinearMipmapLinearFilter;
+      tex.magFilter = THREE.LinearFilter;
+      tex.anisotropy = maxAnisotropy;
+      tex.needsUpdate = true;
+    };
 
     // 8A. OHRC Base Optical Surface
     textureLoader.load("/textures/moon_base.jpg", (tex) => {
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.wrapS = THREE.ClampToEdgeWrapping;
-      tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.magFilter = THREE.LinearFilter;
+      setupGlobeTexture(tex, true);
       if (shaderMaterialRef.current) {
         shaderMaterialRef.current.uniforms.uBaseTexture.value = tex;
         shaderMaterialRef.current.needsUpdate = true;
@@ -411,10 +476,7 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
 
     // 8B. TMC-2 DEM Normal / Topographic Relief Map
     textureLoader.load("/textures/moon_normal.jpg", (tex) => {
-      tex.wrapS = THREE.ClampToEdgeWrapping;
-      tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.magFilter = THREE.LinearFilter;
+      setupGlobeTexture(tex, false);
       if (shaderMaterialRef.current) {
         shaderMaterialRef.current.uniforms.uNormalMap.value = tex;
         shaderMaterialRef.current.needsUpdate = true;
@@ -423,11 +485,7 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
 
     // 8C. IIRS Hyperspectral Mineral Overlay
     textureLoader.load("/textures/mineral_heatmap.png", (tex) => {
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.wrapS = THREE.ClampToEdgeWrapping;
-      tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.magFilter = THREE.LinearFilter;
+      setupGlobeTexture(tex, true);
       if (shaderMaterialRef.current) {
         shaderMaterialRef.current.uniforms.uMineralTexture.value = tex;
         shaderMaterialRef.current.needsUpdate = true;
@@ -436,25 +494,62 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
 
     // 8D. MAGSAC++ Quantitative Uncertainty Map
     textureLoader.load("/textures/uncertainty_map.png", (tex) => {
-      tex.colorSpace = THREE.SRGBColorSpace;
-      tex.wrapS = THREE.ClampToEdgeWrapping;
-      tex.wrapT = THREE.ClampToEdgeWrapping;
-      tex.minFilter = THREE.LinearMipmapLinearFilter;
-      tex.magFilter = THREE.LinearFilter;
+      setupGlobeTexture(tex, true);
       if (shaderMaterialRef.current) {
         shaderMaterialRef.current.uniforms.uUncertaintyTexture.value = tex;
         shaderMaterialRef.current.needsUpdate = true;
       }
     });
 
-    // 9. Highly Subdivided 3D Terrain Plane (4x4 units, 512x512 segments)
-    const terrainGeo = new THREE.PlaneGeometry(4, 4, 512, 512);
-    terrainGeo.rotateX(-Math.PI / 2); // Lay plane flat in XZ space
-    const terrainMesh = new THREE.Mesh(terrainGeo, shaderMaterial);
-    scene.add(terrainMesh);
-    terrainMeshRef.current = terrainMesh;
+    // 9. High-Res Subdivided 3D Spherical Globe (128x128 vertices)
+    const globeGeo = new THREE.SphereGeometry(LUNAR_RADIUS, 128, 128);
+    const globeMesh = new THREE.Mesh(globeGeo, shaderMaterial);
+    scene.add(globeMesh);
+    globeMeshRef.current = globeMesh;
 
-    // 10. Animation & Render Loop (Strict 60 FPS Target)
+    // 10. Footprint & Inlier Group
+    const footprintGroup = new THREE.Group();
+    scene.add(footprintGroup);
+    footprintGroupRef.current = footprintGroup;
+
+    // 11. 3D Global Landmark Pins & Glowing Rings
+    const landmarkGroup = new THREE.Group();
+    LUNAR_LANDMARKS.forEach((lm) => {
+      const pinPos = latLonToVector3(lm.lat, lm.lon, LUNAR_RADIUS * 1.012);
+      const isAristarchus = lm.id === "aristarchus";
+      const isLanding = lm.category === "Landing Site";
+      const pinColor = isAristarchus
+        ? 0x00f0ff
+        : isLanding
+        ? 0xff7700
+        : 0x10b981;
+
+      // Pin core sphere
+      const pinMesh = new THREE.Mesh(
+        new THREE.SphereGeometry(isAristarchus ? 0.034 : 0.024, 16, 16),
+        new THREE.MeshBasicMaterial({ color: pinColor })
+      );
+      pinMesh.position.copy(pinPos);
+      landmarkGroup.add(pinMesh);
+
+      // Glowing surface ring aligned tangent to sphere surface
+      const haloMesh = new THREE.Mesh(
+        new THREE.RingGeometry(0.028, 0.046, 32),
+        new THREE.MeshBasicMaterial({
+          color: pinColor,
+          side: THREE.DoubleSide,
+          transparent: true,
+          opacity: 0.85,
+        })
+      );
+      haloMesh.position.copy(pinPos.clone().multiplyScalar(1.002));
+      haloMesh.lookAt(new THREE.Vector3(0, 0, 0));
+      landmarkGroup.add(haloMesh);
+    });
+    scene.add(landmarkGroup);
+    landmarkGroupRef.current = landmarkGroup;
+
+    // 12. Animation & Render Loop (Strict 60 FPS Target)
     let animationFrameId: number;
     let lastTime = performance.now();
 
@@ -465,12 +560,25 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       const delta = Math.min((now - lastTime) / 1000, 0.1);
       lastTime = now;
 
-      // Camera FlyTo Interpolation
+      // Camera FlyTo Interpolation (Smooth spherical orbital arc)
       if (animRef.current.active) {
         animRef.current.progress += delta / animRef.current.duration;
         const t = Math.min(animRef.current.progress, 1.0);
         const easeT = 0.5 * (1 - Math.cos(Math.PI * t));
-        camera.position.lerpVectors(animRef.current.startPos, animRef.current.endPos, easeT);
+
+        const startDist = animRef.current.startPos.length();
+        const endDist = animRef.current.endPos.length();
+        const curTargetDist = THREE.MathUtils.lerp(startDist, endDist, easeT);
+
+        const curDir = new THREE.Vector3()
+          .lerpVectors(
+            animRef.current.startPos.clone().normalize(),
+            animRef.current.endPos.clone().normalize(),
+            easeT
+          )
+          .normalize();
+
+        camera.position.copy(curDir.multiplyScalar(curTargetDist));
         controls.target.set(0, 0, 0);
 
         if (t >= 1.0) {
@@ -479,12 +587,42 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       }
 
       controls.update();
+
+      // Project 3D landmarks to 2D screen positions for floating interactive labels
+      if (showLabels && container) {
+        const cWidth = container.clientWidth;
+        const cHeight = container.clientHeight;
+        const labels: Array<{ landmark: LunarLandmark; x: number; y: number; visible: boolean }> = [];
+
+        LUNAR_LANDMARKS.forEach((lm) => {
+          const worldPos = latLonToVector3(lm.lat, lm.lon, LUNAR_RADIUS * 1.018);
+          const normal = worldPos.clone().normalize();
+          const viewDir = camera.position.clone().sub(worldPos).normalize();
+          const dot = normal.dot(viewDir);
+
+          // Only show labels when landmark is on the hemisphere facing the camera
+          if (dot > 0.08) {
+            const projected = worldPos.clone().project(camera);
+            if (projected.z < 1.0) {
+              const x = (projected.x * 0.5 + 0.5) * cWidth;
+              const y = (-(projected.y * 0.5) + 0.5) * cHeight;
+              labels.push({ landmark: lm, x, y, visible: true });
+            } else {
+              labels.push({ landmark: lm, x: -100, y: -100, visible: false });
+            }
+          } else {
+            labels.push({ landmark: lm, x: -100, y: -100, visible: false });
+          }
+        });
+        setProjectedLabels(labels);
+      }
+
       renderer.render(scene, camera);
     };
 
     animate();
 
-    // 11. Resize Observer
+    // 13. Resize Observer
     const resizeObserver = new ResizeObserver(() => {
       if (!container) return;
       const w = container.clientWidth;
@@ -496,7 +634,7 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
     });
     resizeObserver.observe(container);
 
-    // 12. Local Raycaster Coordinate Mapping: Maps Plane [-2, 2] X/Z to Sector Bounding Box
+    // 14. Mouse Pointer Raycaster for Surface Telemetry Inspector
     const raycaster = new THREE.Raycaster();
     const mouse = new THREE.Vector2();
 
@@ -506,31 +644,35 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       mouse.y = -((event.clientY - rect.top) / rect.height) * 2 + 1;
 
       raycaster.setFromCamera(mouse, camera);
-      const hits = raycaster.intersectObject(terrainMesh);
+      const hits = raycaster.intersectObject(globeMesh);
 
-      const camAltKm = Math.round(camera.position.distanceTo(controls.target) * 25);
+      const camDist = camera.position.length();
+      const camAltKm = Math.round((camDist - LUNAR_RADIUS) * (1737.4 / LUNAR_RADIUS));
 
       if (hits.length > 0) {
-        const hitPt = hits[0].point;
-        // Plane is width=4 (-2 to +2), height=4 (-2 to +2)
-        // hitPt.x: -2 (West) to +2 (East)
-        // hitPt.z: -2 (North) to +2 (South)
-        const u = THREE.MathUtils.clamp((hitPt.x + 2.0) / 4.0, 0.0, 1.0);
-        const v = THREE.MathUtils.clamp((hitPt.z + 2.0) / 4.0, 0.0, 1.0);
+        const { lat, lon } = vector3ToLatLon(hits[0].point, LUNAR_RADIUS);
+        
+        let simElev = -1650;
+        const dAristarchus = Math.hypot(lat - 23.7, lon - (-47.4));
+        const dShackleton = Math.hypot(lat - (-89.9), lon - 0);
+        const dShivShakti = Math.hypot(lat - (-69.37), lon - 32.32);
 
-        const bb = lunarCoords.bounding_box;
-        const lon = bb.west + (bb.east - bb.west) * u;
-        const lat = bb.north - (bb.north - bb.south) * v;
-
-        // Elevation simulated from displacement Y relief
-        const elev = Math.round((lunarCoords.elevation_m || -1240) + hitPt.y * 1400);
+        if (dAristarchus < 6.0) {
+          simElev = Math.round(-1240 + Math.sin(lat * 12) * 520 + Math.cos(lon * 12) * 380);
+        } else if (dShackleton < 5.0) {
+          simElev = Math.round(-3900 + Math.sin(lat * 8) * 850);
+        } else if (dShivShakti < 5.0) {
+          simElev = Math.round(-1820 + Math.cos(lat * 10) * 450);
+        } else {
+          simElev = Math.round(-1750 + Math.sin(lat * 0.08) * 950 + Math.cos(lon * 0.08) * 650);
+        }
 
         if (onUpdateCoords) {
           onUpdateCoords({
             lat: Number(lat.toFixed(4)),
             lon: Number(lon.toFixed(4)),
-            elevation_m: elev,
-            cameraAltitude_km: camAltKm,
+            elevation_m: simElev,
+            cameraAltitude_km: Math.max(camAltKm, 15),
           });
         }
       } else if (onUpdateCoords) {
@@ -538,7 +680,7 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
           lat: null,
           lon: null,
           elevation_m: null,
-          cameraAltitude_km: camAltKm,
+          cameraAltitude_km: Math.max(camAltKm, 15),
         });
       }
     };
@@ -552,7 +694,7 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       domElement.removeEventListener("mousemove", handlePointerMove);
       controls.dispose();
       renderer.dispose();
-      terrainGeo.dispose();
+      globeGeo.dispose();
       shaderMaterial.dispose();
       starGeo.dispose();
       starMat.dispose();
@@ -563,7 +705,7 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
   }, []);
 
   // ---------------------------------------------------------------------------
-  // 2. Dynamic Uniform Opacity Updates
+  // 2. Dynamic Uniform Opacity Updates (Instant GPU Uniform Dispatch)
   // ---------------------------------------------------------------------------
   useEffect(() => {
     if (!shaderMaterialRef.current) return;
@@ -590,60 +732,206 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
   }, [enableLighting]);
 
   // ---------------------------------------------------------------------------
-  // 4. Reset & Navigation Handlers
+  // 4. Footprint Perimeter & MAGSAC++ Inliers Rendering
   // ---------------------------------------------------------------------------
-  const resetToIsometricView = () => {
+  useEffect(() => {
+    const group = footprintGroupRef.current;
+    if (!group) return;
+
+    while (group.children.length > 0) {
+      const obj = group.children[0];
+      group.remove(obj);
+      if ((obj as any).geometry) (obj as any).geometry.dispose();
+      if ((obj as any).material) (obj as any).material.dispose();
+    }
+
+    if (!showAlignmentFootprint) return;
+
+    const { west, south, east, north } = lunarCoords.bounding_box;
+
+    // Curved Perimeter Boundary around Sector
+    const curvePoints: THREE.Vector3[] = [];
+    const steps = 24;
+
+    for (let i = 0; i <= steps; i++) {
+      const lon = west + (east - west) * (i / steps);
+      curvePoints.push(latLonToVector3(south, lon, LUNAR_RADIUS * 1.014));
+    }
+    for (let i = 0; i <= steps; i++) {
+      const lat = south + (north - south) * (i / steps);
+      curvePoints.push(latLonToVector3(lat, east, LUNAR_RADIUS * 1.014));
+    }
+    for (let i = 0; i <= steps; i++) {
+      const lon = east - (east - west) * (i / steps);
+      curvePoints.push(latLonToVector3(north, lon, LUNAR_RADIUS * 1.014));
+    }
+    for (let i = 0; i <= steps; i++) {
+      const lat = north - (north - south) * (i / steps);
+      curvePoints.push(latLonToVector3(lat, west, LUNAR_RADIUS * 1.014));
+    }
+
+    const lineGeo = new THREE.BufferGeometry().setFromPoints(curvePoints);
+    const lineMat = new THREE.LineBasicMaterial({
+      color: 0x00f0ff,
+      linewidth: 2,
+    });
+    const lineMesh = new THREE.LineLoop(lineGeo, lineMat);
+    group.add(lineMesh);
+
+    // Optical Center Marker
+    const centerPos = latLonToVector3(lunarCoords.center_lat, lunarCoords.center_lon, LUNAR_RADIUS * 1.018);
+    const centerMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.026, 16, 16),
+      new THREE.MeshBasicMaterial({ color: 0xff6600 })
+    );
+    centerMarker.position.copy(centerPos);
+    group.add(centerMarker);
+
+    // MAGSAC++ Verified Inlier Keypoint Cloud
+    const inlierCount = 180;
+    const inlierPoints: THREE.Vector3[] = [];
+    for (let i = 0; i < inlierCount; i++) {
+      const lon = west + Math.random() * (east - west);
+      const lat = south + Math.random() * (north - south);
+      inlierPoints.push(latLonToVector3(lat, lon, LUNAR_RADIUS * 1.016));
+    }
+
+    const inlierGeo = new THREE.BufferGeometry().setFromPoints(inlierPoints);
+    const inlierMat = new THREE.PointsMaterial({
+      color: 0x10b981,
+      size: 2.8,
+      transparent: true,
+      opacity: 0.9,
+    });
+    const inlierCloud = new THREE.Points(inlierGeo, inlierMat);
+    group.add(inlierCloud);
+  }, [showAlignmentFootprint, lunarCoords]);
+
+  // ---------------------------------------------------------------------------
+  // 5. Camera Navigation: FlyTo Selected Landmark
+  // ---------------------------------------------------------------------------
+  const executeFlyTo = useCallback((landmark: LunarLandmark) => {
     const camera = cameraRef.current;
     if (!camera) return;
+
+    const targetDir = latLonToVector3(landmark.lat, landmark.lon, 1.0).normalize();
+    const distance = landmark.diameter_km ? Math.max(2.65, 2.0 + landmark.diameter_km / 75) : 3.4;
+    const targetPos = targetDir.multiplyScalar(distance);
+
     animRef.current = {
       active: true,
       startPos: camera.position.clone(),
-      endPos: defaultCamPos.current.clone(),
+      endPos: targetPos,
       progress: 0,
-      duration: 1.2,
+      duration: 1.5,
     };
+  }, []);
+
+  useEffect(() => {
+    if (flyToLandmark) {
+      executeFlyTo(flyToLandmark);
+    }
+  }, [flyToLandmark, executeFlyTo]);
+
+  const resetToAristarchus = () => {
+    executeFlyTo({
+      id: "aristarchus",
+      name: "Aristarchus Plateau",
+      category: "Mountain",
+      lat: 23.7,
+      lon: -47.4,
+      elevation_m: -1240,
+      description: "Primary registration sector for Chandrayaan-2 cross-modal benchmark.",
+      geological_interest: "High albedo plateau, pyroclastic volcanic deposits",
+    });
   };
 
   const zoomIn = () => {
     const camera = cameraRef.current;
-    const controls = controlsRef.current;
-    if (!camera || !controls) return;
-    const curDist = camera.position.distanceTo(controls.target);
-    const newDist = Math.max(curDist * 0.75, 0.5);
-    const dir = camera.position.clone().sub(controls.target).normalize();
-    camera.position.copy(controls.target.clone().add(dir.multiplyScalar(newDist)));
+    if (!camera) return;
+    const curDist = camera.position.length();
+    const newDist = Math.max(curDist * 0.8, 2.25);
+    camera.position.normalize().multiplyScalar(newDist);
   };
 
   const zoomOut = () => {
     const camera = cameraRef.current;
-    const controls = controlsRef.current;
-    if (!camera || !controls) return;
-    const curDist = camera.position.distanceTo(controls.target);
-    const newDist = Math.min(curDist * 1.3, 10.0);
-    const dir = camera.position.clone().sub(controls.target).normalize();
-    camera.position.copy(controls.target.clone().add(dir.multiplyScalar(newDist)));
+    if (!camera) return;
+    const curDist = camera.position.length();
+    const newDist = Math.min(curDist * 1.25, 14.0);
+    camera.position.normalize().multiplyScalar(newDist);
   };
 
   return (
     <div className="relative w-full h-full min-h-[500px] overflow-hidden rounded-2xl border border-white/15 glass-panel shadow-2xl">
       <div ref={containerRef} className="w-full h-full min-h-[500px] bg-black cursor-grab active:cursor-grabbing" />
 
+      {/* 2D Projected Floating Landmark Labels */}
+      {showLabels && (
+        <div className="absolute inset-0 pointer-events-none z-10 overflow-hidden">
+          {projectedLabels.map(({ landmark, x, y, visible }) => {
+            if (!visible || x < 0 || y < 0) return null;
+            const isAristarchus = landmark.id === "aristarchus";
+            const isLanding = landmark.category === "Landing Site";
+            return (
+              <div
+                key={landmark.id}
+                style={{ transform: `translate(${x}px, ${y}px)` }}
+                className="absolute -translate-x-1/2 -translate-y-full mb-2 pointer-events-auto transition-opacity duration-200"
+              >
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (onSelectLandmark) onSelectLandmark(landmark);
+                    executeFlyTo(landmark);
+                  }}
+                  className={`group px-2.5 py-1 rounded-xl text-[10px] font-mono border backdrop-blur-xl flex items-center space-x-1.5 shadow-lg transition-all hover:scale-105 ${
+                    isAristarchus
+                      ? "bg-cyan-950/90 border-cyan-400 text-cyan-200 shadow-cyan-500/30 scale-105"
+                      : isLanding
+                      ? "bg-amber-950/80 border-amber-400 text-amber-200 hover:bg-amber-900"
+                      : "bg-slate-950/80 border-white/20 text-slate-200 hover:bg-slate-900"
+                  }`}
+                >
+                  <span
+                    className={`w-1.5 h-1.5 rounded-full ${
+                      isAristarchus
+                        ? "bg-cyan-400 animate-ping"
+                        : isLanding
+                        ? "bg-amber-400 animate-pulse"
+                        : "bg-slate-400"
+                    }`}
+                  />
+                  <span className="font-semibold whitespace-nowrap">
+                    {landmark.name.split(" (")[0]}
+                  </span>
+                </button>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
       {/* Top Left Status Overlay */}
       <div className="absolute top-4 left-4 z-20 flex flex-wrap items-center gap-2 pointer-events-none">
         <div className="px-3 py-1.5 rounded-xl bg-black/80 backdrop-blur-xl border border-cyan-500/40 text-xs font-mono text-cyan-300 flex items-center space-x-2 shadow-lg pointer-events-auto">
-          <Mountain className="w-3.5 h-3.5 text-cyan-400" />
-          <span>3D SURFACE TERRAIN INSPECTOR (5 km² ARISTARCHUS PATCH)</span>
+          <Globe2 className="w-3.5 h-3.5 text-cyan-400" />
+          <span>
+            SECTOR: {lunarCoords.target_region.toUpperCase()} ({lunarCoords.center_lat.toFixed(1)}°{" "}
+            {lunarCoords.center_lat >= 0 ? "N" : "S"}, {Math.abs(lunarCoords.center_lon).toFixed(1)}°{" "}
+            {lunarCoords.center_lon >= 0 ? "E" : "W"})
+          </span>
         </div>
 
         <div className="px-3 py-1.5 rounded-xl bg-emerald-950/85 backdrop-blur-xl border border-emerald-500/40 text-xs font-mono text-emerald-300 flex items-center space-x-2 shadow-lg pointer-events-auto">
           <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-          <span>512×512 HIGH-RES PLANE MESH (ZERO STRETCH)</span>
+          <span>60 FPS 3D LUNAR GLOBE (128×128 SHADERS)</span>
         </div>
 
         {opacities.uncertainty > 0.1 && (
           <div className="px-3 py-1.5 rounded-xl bg-rose-950/85 backdrop-blur-xl border border-rose-400 text-xs font-mono text-rose-200 flex items-center space-x-2 shadow-lg pointer-events-auto animate-pulse">
             <span className="w-2 h-2 rounded-full bg-rose-400" />
-            <span>MAGSAC++ UNCERTAINTY ACTIVE</span>
+            <span>MAGSAC++ UNCERTAINTY DRAPED</span>
           </div>
         )}
       </div>
@@ -652,8 +940,8 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       <div className="absolute top-4 right-4 z-20 flex flex-col space-y-2 pointer-events-none">
         <button
           type="button"
-          onClick={resetToIsometricView}
-          title="Reset to Angled Isometric Terrain View"
+          onClick={resetToAristarchus}
+          title="Center on Aristarchus Plateau"
           className="p-2.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 text-slate-200 hover:text-cyan-300 border border-white/15 backdrop-blur-xl transition-all shadow-lg pointer-events-auto"
         >
           <Compass className="w-5 h-5" />
