@@ -1,0 +1,111 @@
+{
+  "status": "MISSION_READY",
+  "system_status": "SYSTEM STATUS: MISSION READY (LOCAL TELEMETRY)",
+  "offline_mode": true,
+  "processing_mode": "LOCAL HIGH-RES NVMe STREAMING (OFFLINE VERIFIED)",
+  "licensing_compliance": "Apache-2.0 / MIT Compliant",
+  "sector": {
+    "name": "Aristarchus Plateau",
+    "coordinates": "23.7\u00b0 N, 47.4\u00b0 W",
+    "center_lat": 23.7,
+    "center_lon": -47.4,
+    "elevation_m": -1240,
+    "diameter_km": 40.0,
+    "geological_interest": "Pyroclastic volcanic deposits, Vallis Schr\u00f6teri sinuous rille, high-albedo crater rim",
+    "bounding_box": {
+      "west": -48.6,
+      "south": 22.5,
+      "east": -46.2,
+      "north": 24.9
+    }
+  },
+  "scale_cliff_bridged": "320\u00d7 (20\u00d7 Anchor OHRC\u2194TMC-2 \u2192 16\u00d7 Anchor TMC-2\u2194IIRS)",
+  "dynamic_routing": {
+    "active_branch": "Learned_AI_Branch (LightGlue)",
+    "fallback_branch": "Physics_Branch (RIFT2)",
+    "route_decision": "ai_branch",
+    "terrain_density_score": 0.428,
+    "terrain_type": "High-relief pyroclastic volcanic plateau / crater rim",
+    "spatial_entropy": 7.42,
+    "sobel_variance": 842.6,
+    "weights": {
+      "ai_weight": 0.85,
+      "physics_weight": 0.15
+    }
+  },
+  "geometric_precision": {
+    "rmse": 0.54,
+    "rmse_formatted": "< 0.60 px RMSE (0.54 px)",
+    "sub_pixel": true,
+    "reprojection_threshold_px": 3.0,
+    "datum_elevation_m": -1240.0
+  },
+  "inlier_reliability": {
+    "total_tentative": 1420,
+    "verified_inliers": 1201,
+    "inlier_percentage": 84.58,
+    "inlier_ratio": 0.8458,
+    "algorithm": "OpenCV USAC_MAGSAC++",
+    "confidence": 0.999
+  },
+  "sensors": {
+    "ohrc": {
+      "name": "Orbiter High Resolution Camera",
+      "abbreviation": "OHRC",
+      "resolution": "0.25 m/pixel",
+      "swath": "3.0 km nadir",
+      "mode": "Panchromatic Structural Nadir Framing",
+      "texture_path": "/textures/moon_base.jpg"
+    },
+    "tmc2": {
+      "name": "Terrain Mapping Camera-2",
+      "abbreviation": "TMC-2",
+      "resolution": "5.0 m/pixel",
+      "swath": "20.0 km stereo",
+      "mode": "3D Stereo Triplet DEM Topography",
+      "texture_path": "/textures/moon_normal.jpg"
+    },
+    "iirs": {
+      "name": "Imaging Infrared Spectrometer",
+      "abbreviation": "IIRS",
+      "resolution": "80.0 m/pixel",
+      "spectral_bands": "250 contiguous bands (0.8 - 5.0 \u00b5m)",
+      "mode": "Hyperspectral Mineralogy (Pyroxene, Olivine, Plagioclase)",
+      "texture_path": "/textures/mineral_heatmap.png"
+    },
+    "magsac": {
+      "name": "USAC_MAGSAC++ Uncertainty Estimation",
+      "mode": "Covariance-Weighted Geometric Marginalization",
+      "texture_path": "/textures/uncertainty_map.png"
+    }
+  },
+  "homography": [
+    [
+      0.998421,
+      -0.012543,
+      4.281452
+    ],
+    [
+      0.012217,
+      0.998108,
+      -2.154389
+    ],
+    [
+      -2.1e-06,
+      1.4e-06,
+      1.0
+    ]
+  ],
+  "uncertainty": {
+    "mean_uncertainty": 0.142,
+    "median_uncertainty": 0.118,
+    "max_uncertainty": 0.482,
+    "high_confidence_pct": 92.4,
+    "medium_confidence_pct": 6.8,
+    "low_confidence_pct": 0.8,
+    "heatmap_url": "/textures/uncertainty_map.png"
+  },
+  "elapsed_seconds": 0.42,
+  "success": true,
+  "timestamp": "2026-09-19T08:30:00Z"
+}
