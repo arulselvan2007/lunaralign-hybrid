@@ -104,6 +104,10 @@ function createSolidColorTexture(r: number, g: number, b: number, a: number = 25
 
 /**
  * Custom High-Performance Multi-Layer Draping & Displacement Shader
+ * - 3x Increased Topographic Relief Displacement in Vertex Shader
+ * - High-Contrast Grayscale Panchromatic Base (OHRC)
+ * - Explosive Neon Cyan/Orange False-Color Hyperspectral Mapping (IIRS)
+ * - Aggressive Translucent Crimson/Green Heatmap (MAGSAC++ Uncertainty)
  */
 const LunarShader = {
   vertexShader: `
@@ -118,13 +122,12 @@ const LunarShader = {
     void main() {
       vUv = uv;
       
-      // Sample elevation from TMC-2 normal/DEM displacement texture
+      // Sample elevation from TMC-2 DEM displacement map
       vec4 normSample = texture2D(uNormalMap, uv);
-      // Normalized elevation derived from photometric luminance and height channel
       float height = dot(normSample.rgb, vec3(0.299, 0.587, 0.114));
       
-      // Smooth displacement along surface normal vector
-      float disp = (height - 0.45) * (uDisplacementScale * 0.14);
+      // 3x Increased Topographic Relief Multiplier (0.45 scale) for deep shadows and dramatic crater rims
+      float disp = (height - 0.45) * (uDisplacementScale * 0.45);
       vec3 displacedPos = position + normal * disp;
 
       vNormal = normalize(normalMatrix * normal);
@@ -160,40 +163,61 @@ const LunarShader = {
       vec4 mineralTex = texture2D(uMineralTexture, vUv);
       vec4 uncertTex = texture2D(uUncertaintyTexture, vUv);
 
-      // 2. Base Composite (Anorthositic Regolith)
-      vec3 finalColor = vec3(0.04, 0.04, 0.05);
-      
-      // Blend Base OHRC Optical Layer
-      finalColor = mix(finalColor, baseTex.rgb, clamp(uOpacityBase, 0.0, 1.0));
+      // 2. Base OHRC Optical Layer: High-Contrast Sharp Grayscale Panchromatic
+      float luma = dot(baseTex.rgb, vec3(0.299, 0.587, 0.114));
+      float sharpLuma = smoothstep(0.08, 0.84, luma);
+      sharpLuma = pow(sharpLuma, 1.15);
+      vec3 ohrcPan = vec3(sharpLuma * 1.15);
 
-      // 3. Blend IIRS Hyperspectral Mineralogy Overlay
-      // Structural proxy bands: 950nm pyroxene, 1050nm olivine, 1250nm plagioclase
+      vec3 finalColor = vec3(0.02, 0.02, 0.02);
+      finalColor = mix(finalColor, ohrcPan, clamp(uOpacityBase, 0.0, 1.0));
+
+      // 3. IIRS Mineral: Harsh, Vibrant False-Color Mapping (Cyan/Orange Neon Overriding Base)
+      // Structural proxy bands: 950nm pyroxene (Neon Orange), 1050nm olivine (Neon Lime), 1250nm plagioclase/ice (Electric Cyan)
       if (uOpacityMineral > 0.01) {
-        float mAlpha = mineralTex.a * uOpacityMineral;
-        // Boost contrast and false-color saturation
-        vec3 satMineral = mineralTex.rgb;
-        finalColor = mix(finalColor, satMineral, clamp(mAlpha, 0.0, 1.0));
+        vec3 neonPyroxene = vec3(1.0, 0.32, 0.0) * (mineralTex.r * 2.4 + 0.20);
+        vec3 neonOlivine = vec3(0.20, 1.0, 0.05) * (mineralTex.g * 2.2 + 0.15);
+        vec3 neonPlagioclase = vec3(0.0, 0.88, 1.0) * (mineralTex.b * 2.8 + 0.25);
+
+        vec3 explosiveMineral = neonPyroxene * (mineralTex.r + 0.2) +
+                                neonOlivine * (mineralTex.g + 0.15) +
+                                neonPlagioclase * (mineralTex.b + 0.25);
+
+        explosiveMineral = clamp(explosiveMineral * 1.45, 0.0, 1.0);
+        float mineralFactor = clamp(uOpacityMineral * 1.35, 0.0, 1.0);
+        finalColor = mix(finalColor, explosiveMineral, mineralFactor);
       }
 
-      // 4. Blend MAGSAC++ Uncertainty Heatmap
-      // Quantitative error metric: Green (<0.25 px high conf) -> Red (>0.65 px low conf)
+      // 4. MAGSAC++ Uncertainty: Aggressive Translucent Red / Green Overlay
+      // Electric Emerald (< 0.25 px high conf) vs Blazing Crimson Red (> 0.65 px uncertainty)
       if (uOpacityUncertainty > 0.01) {
-        float uAlpha = uncertTex.a * uOpacityUncertainty * 0.85;
-        finalColor = mix(finalColor, uncertTex.rgb, clamp(uAlpha, 0.0, 0.95));
+        vec3 aggressiveOverlay;
+        float uVal = uncertTex.r;
+        float gVal = uncertTex.g;
+
+        if (uVal > gVal * 0.85 || uVal > 0.35) {
+          aggressiveOverlay = vec3(1.0, 0.02, 0.12) * (1.2 + uVal * 0.8);
+        } else {
+          aggressiveOverlay = vec3(0.0, 1.0, 0.35) * (1.1 + gVal * 0.6);
+        }
+
+        aggressiveOverlay = clamp(aggressiveOverlay, 0.0, 1.0);
+        float overlayAlpha = clamp(uOpacityUncertainty * 0.85, 0.0, 0.92);
+        finalColor = mix(finalColor, aggressiveOverlay, overlayAlpha);
       }
 
-      // 5. Grazing Solar Terminator Lighting (Lambertian + Lommel-Seeliger scattering)
+      // 5. Grazing Solar Terminator Lighting with Deep High-Relief Shadows
       vec3 normal = normalize(vNormal);
       vec3 lightDir = normalize(uSunDirection);
-      float diff = max(dot(normal, lightDir), 0.0);
+      float rawDiff = dot(normal, lightDir);
+      float diff = smoothstep(-0.05, 0.65, rawDiff);
 
-      // Lunar limb darkening / Lommel-Seeliger scattering approximation
       vec3 viewDir = normalize(vViewPosition);
       float costheta = max(dot(normal, viewDir), 0.001);
-      float cosi = max(diff, 0.001);
+      float cosi = max(max(rawDiff, 0.0), 0.001);
       float lommel = cosi / (cosi + costheta);
 
-      vec3 litColor = finalColor * (uAmbientIntensity + diff * 1.6 + lommel * 0.35);
+      vec3 litColor = finalColor * (uAmbientIntensity + diff * 1.85 + lommel * 0.40);
 
       gl_FragColor = vec4(litColor, 1.0);
     }
@@ -238,7 +262,6 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
   const cameraRef = useRef<THREE.PerspectiveCamera | null>(null);
   const controlsRef = useRef<OrbitControls | null>(null);
   const globeMeshRef = useRef<THREE.Mesh | null>(null);
-  const terrainMeshRef = useRef<THREE.Mesh | null>(null);
   const shaderMaterialRef = useRef<THREE.ShaderMaterial | null>(null);
   const sunLightRef = useRef<THREE.DirectionalLight | null>(null);
   const ambientLightRef = useRef<THREE.AmbientLight | null>(null);
@@ -294,7 +317,6 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       };
     },
     resetView: () => {
-      // Fly to Aristarchus Plateau
       if (cameraRef.current) {
         const targetPos = latLonToVector3(23.7, -47.4, 3.5);
         animRef.current = {
@@ -338,7 +360,7 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 2));
     renderer.setSize(width, height);
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
-    renderer.toneMappingExposure = 1.1;
+    renderer.toneMappingExposure = 1.15;
     container.appendChild(renderer.domElement);
     rendererRef.current = renderer;
 
@@ -348,18 +370,18 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
     controls.dampingFactor = 0.05;
     controls.rotateSpeed = 0.75;
     controls.zoomSpeed = 0.9;
-    controls.minDistance = 2.25; // Clamped to prevent surface clipping
+    controls.minDistance = 2.25;
     controls.maxDistance = 14.0;
-    controls.enablePan = false; // Locked to lunar center pivot
+    controls.enablePan = false;
     controlsRef.current = controls;
 
     // 5. Lighting: Grazing Solar Terminator + Soft Earthshine
-    const sunLight = new THREE.DirectionalLight(0xffffff, enableLighting ? 2.6 : 1.6);
-    sunLight.position.set(5.5, 1.8, 3.2); // Grazing angle along lunar terminator line
+    const sunLight = new THREE.DirectionalLight(0xffffff, enableLighting ? 2.8 : 1.6);
+    sunLight.position.set(5.5, 1.8, 3.2);
     scene.add(sunLight);
     sunLightRef.current = sunLight;
 
-    const ambientLight = new THREE.AmbientLight(0x1a2233, enableLighting ? 0.22 : 0.65);
+    const ambientLight = new THREE.AmbientLight(0x1a2233, enableLighting ? 0.20 : 0.65);
     scene.add(ambientLight);
     ambientLightRef.current = ambientLight;
 
@@ -395,7 +417,6 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
     scene.add(starPoints);
 
     // 7. Multi-Layer Blending Custom Shader Material
-    // Instant solid-color fallbacks to eliminate any black flash
     const fallbackBase = createSolidColorTexture(140, 142, 146);
     const fallbackNormal = createSolidColorTexture(128, 128, 255);
     const fallbackMineral = createSolidColorTexture(60, 180, 220, 180);
@@ -414,7 +435,7 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
         uOpacityMineral: { value: opacities.mineral },
         uOpacityUncertainty: { value: opacities.uncertainty },
         uSunDirection: { value: new THREE.Vector3(5.5, 1.8, 3.2).normalize() },
-        uAmbientIntensity: { value: enableLighting ? 0.22 : 0.65 },
+        uAmbientIntensity: { value: enableLighting ? 0.20 : 0.65 },
       },
     });
     shaderMaterialRef.current = shaderMaterial;
@@ -465,7 +486,7 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       }
     });
 
-    // 9. Lunar Geometry: Subdivided Spherical Mesh (128x128 vertices for authentic 3D rims)
+    // 9. Subdivided Spherical Mesh (128x128 vertices for authentic 3D rims)
     const globeGeo = new THREE.SphereGeometry(LUNAR_RADIUS, 128, 128);
     const globeMesh = new THREE.Mesh(globeGeo, shaderMaterial);
     scene.add(globeMesh);
@@ -483,10 +504,10 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       const isAristarchus = lm.id === "aristarchus";
       const isLanding = lm.category === "Landing Site";
       const pinColor = isAristarchus
-        ? 0x00f0ff // Highlighting Aristarchus Plateau
+        ? 0x00f0ff
         : isLanding
-        ? 0xff6600 // ISRO Saffron
-        : 0x10b981; // Emerald
+        ? 0xff6600
+        : 0x10b981;
 
       const pinMesh = new THREE.Mesh(
         new THREE.SphereGeometry(isAristarchus ? 0.032 : 0.022, 16, 16),
@@ -495,7 +516,6 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       pinMesh.position.copy(pinPos);
       landmarkGroup.add(pinMesh);
 
-      // Subtle beacon halo
       const haloMesh = new THREE.Mesh(
         new THREE.RingGeometry(0.028, 0.045, 24),
         new THREE.MeshBasicMaterial({
@@ -527,7 +547,6 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       if (animRef.current.active) {
         animRef.current.progress += delta / animRef.current.duration;
         const t = Math.min(animRef.current.progress, 1.0);
-        // Smooth sine ease-in-out curve
         const easeT = 0.5 * (1 - Math.cos(Math.PI * t));
         camera.position.lerpVectors(animRef.current.startPos, animRef.current.endPos, easeT);
         controls.target.set(0, 0, 0);
@@ -547,7 +566,6 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
 
         LUNAR_LANDMARKS.forEach((lm) => {
           const worldPos = latLonToVector3(lm.lat, lm.lon, LUNAR_RADIUS * 1.015);
-          // Check occluded backside: Dot product between surface normal and camera vector
           const normal = worldPos.clone().normalize();
           const viewDir = camera.position.clone().sub(worldPos).normalize();
           const dot = normal.dot(viewDir);
@@ -597,7 +615,6 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
 
       if (hits.length > 0) {
         const { lat, lon } = vector3ToLatLon(hits[0].point, LUNAR_RADIUS);
-        // Realistic simulated elevation based on Aristarchus Plateau & crater morphology
         const distToAristarchus = Math.hypot(lat - 23.7, lon - (-47.4));
         const simElev =
           distToAristarchus < 8.0
@@ -659,13 +676,13 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
   // ---------------------------------------------------------------------------
   useEffect(() => {
     if (sunLightRef.current) {
-      sunLightRef.current.intensity = enableLighting ? 2.6 : 1.6;
+      sunLightRef.current.intensity = enableLighting ? 2.8 : 1.6;
     }
     if (ambientLightRef.current) {
-      ambientLightRef.current.intensity = enableLighting ? 0.22 : 0.65;
+      ambientLightRef.current.intensity = enableLighting ? 0.20 : 0.65;
     }
     if (shaderMaterialRef.current) {
-      shaderMaterialRef.current.uniforms.uAmbientIntensity.value = enableLighting ? 0.22 : 0.65;
+      shaderMaterialRef.current.uniforms.uAmbientIntensity.value = enableLighting ? 0.20 : 0.65;
     }
   }, [enableLighting]);
 
@@ -676,7 +693,6 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
     const group = footprintGroupRef.current;
     if (!group) return;
 
-    // Clear previous entities
     while (group.children.length > 0) {
       const obj = group.children[0];
       group.remove(obj);
@@ -688,26 +704,22 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
 
     const { west, south, east, north } = lunarCoords.bounding_box;
 
-    // 1. Curved Perimeter Boundary around Sector (Aristarchus Plateau)
+    // Curved Perimeter Boundary around Sector (Aristarchus Plateau)
     const curvePoints: THREE.Vector3[] = [];
     const steps = 16;
 
-    // Bottom edge (south: west -> east)
     for (let i = 0; i <= steps; i++) {
       const lon = west + (east - west) * (i / steps);
       curvePoints.push(latLonToVector3(south, lon, LUNAR_RADIUS * 1.014));
     }
-    // Right edge (east: south -> north)
     for (let i = 0; i <= steps; i++) {
       const lat = south + (north - south) * (i / steps);
       curvePoints.push(latLonToVector3(lat, east, LUNAR_RADIUS * 1.014));
     }
-    // Top edge (north: east -> west)
     for (let i = 0; i <= steps; i++) {
       const lon = east - (east - west) * (i / steps);
       curvePoints.push(latLonToVector3(north, lon, LUNAR_RADIUS * 1.014));
     }
-    // Left edge (west: north -> south)
     for (let i = 0; i <= steps; i++) {
       const lat = north - (north - south) * (i / steps);
       curvePoints.push(latLonToVector3(lat, west, LUNAR_RADIUS * 1.014));
@@ -715,22 +727,22 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
 
     const lineGeo = new THREE.BufferGeometry().setFromPoints(curvePoints);
     const lineMat = new THREE.LineBasicMaterial({
-      color: 0x00f0ff, // Cyan bounding box
+      color: 0x00f0ff,
       linewidth: 2,
     });
     const lineMesh = new THREE.LineLoop(lineGeo, lineMat);
     group.add(lineMesh);
 
-    // 2. Optical Center Crosshair Marker
+    // Optical Center Crosshair Marker
     const centerPos = latLonToVector3(lunarCoords.center_lat, lunarCoords.center_lon, LUNAR_RADIUS * 1.018);
     const centerMarker = new THREE.Mesh(
       new THREE.SphereGeometry(0.026, 16, 16),
-      new THREE.MeshBasicMaterial({ color: 0xff6600 }) // ISRO Saffron
+      new THREE.MeshBasicMaterial({ color: 0xff6600 })
     );
     centerMarker.position.copy(centerPos);
     group.add(centerMarker);
 
-    // 3. MAGSAC++ Verified Inlier Keypoint Cloud (1,201 verified tie-points)
+    // MAGSAC++ Verified Inlier Keypoint Cloud
     const inlierCount = 180;
     const inlierPoints: THREE.Vector3[] = [];
     for (let i = 0; i < inlierCount; i++) {
@@ -741,7 +753,7 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
 
     const inlierGeo = new THREE.BufferGeometry().setFromPoints(inlierPoints);
     const inlierMat = new THREE.PointsMaterial({
-      color: 0x10b981, // Emerald tie-point inliers
+      color: 0x10b981,
       size: 2.8,
       transparent: true,
       opacity: 0.9,
@@ -807,7 +819,6 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
 
   return (
     <div className="relative w-full h-full min-h-[500px] overflow-hidden rounded-2xl border border-white/15 glass-panel shadow-2xl">
-      {/* Three.js 3D WebGL Canvas Container */}
       <div ref={containerRef} className="w-full h-full min-h-[500px] bg-black cursor-grab active:cursor-grabbing" />
 
       {/* 2D Projected Floating Landmark Labels */}
