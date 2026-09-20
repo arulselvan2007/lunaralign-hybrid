@@ -142,6 +142,28 @@ export default function LunarAlignMissionControl() {
     if (matchData.simulated_lunar_coords) {
       setLunarCoords(matchData.simulated_lunar_coords);
     }
+
+    // Automatically trigger the Uncertainty Layer (set opacities.uncertainty to 0.85)
+    setOpacities((prev) => {
+      const next = { ...prev, uncertainty: 0.85 };
+      if (viewerRef.current) {
+        viewerRef.current.setOpacities({ uncertainty: 0.85 });
+      }
+      return next;
+    });
+
+    // Simultaneously trigger the Alignment Footprint
+    setShowAlignmentFootprint(true);
+  }, []);
+
+  const handleTriggerUncertainty = useCallback((uncertaintyVal: number = 0.85) => {
+    setOpacities((prev) => {
+      const next = { ...prev, uncertainty: uncertaintyVal };
+      if (viewerRef.current) {
+        viewerRef.current.setOpacities({ uncertainty: uncertaintyVal });
+      }
+      return next;
+    });
   }, []);
 
   // Trigger Local Precomputed Alignment Matcher
@@ -276,6 +298,8 @@ export default function LunarAlignMissionControl() {
             onRefreshTiles={async () => setTiles(DEFAULT_TILES)}
             isLoading={isLoading}
             ingesting={ingesting}
+            onTriggerUncertainty={handleTriggerUncertainty}
+            onToggleAlignmentFootprint={setShowAlignmentFootprint}
           />
 
           <LayerToggleHUD

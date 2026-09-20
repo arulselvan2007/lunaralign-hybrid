@@ -38,6 +38,8 @@ interface ControlPanelProps {
   onRefreshTiles?: () => Promise<void> | void;
   isLoading?: boolean;
   ingesting: boolean;
+  onTriggerUncertainty?: (uncertaintyVal: number) => void;
+  onToggleAlignmentFootprint?: (show: boolean) => void;
 }
 
 export default function ControlPanel({
@@ -48,6 +50,8 @@ export default function ControlPanel({
   onRefreshTiles,
   isLoading = false,
   ingesting,
+  onTriggerUncertainty,
+  onToggleAlignmentFootprint,
 }: ControlPanelProps) {
   // ---------------------------------------------------------------------------
   // 1. Fully Reactive State Hooks for Deep Alignment Tab
@@ -173,6 +177,14 @@ export default function ControlPanel({
           inlierRatio * 100
         ).toFixed(1)}%) in ${elapsedSec}s with RMSE ${meanReprojError} px.`
       );
+
+      // Automatically trigger the Uncertainty layer (0.85 opacity) and Footprint perimeter (true)
+      if (onTriggerUncertainty) {
+        onTriggerUncertainty(0.85);
+      }
+      if (onToggleAlignmentFootprint) {
+        onToggleAlignmentFootprint(true);
+      }
 
       if (onMatchSuccess) {
         onMatchSuccess(verifiedTelemetry);

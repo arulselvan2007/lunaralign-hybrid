@@ -311,11 +311,12 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       if (newOpacities.mineral !== undefined) uniforms.uOpacityMineral.value = newOpacities.mineral;
       if (newOpacities.uncertainty !== undefined) uniforms.uOpacityUncertainty.value = newOpacities.uncertainty;
     },
-    flyTo: (lat: number, lon: number, distance: number = 3.4) => {
+    flyTo: (lat: number, lon: number, distance: number = 3.8) => {
       const camera = cameraRef.current;
       if (!camera) return;
       const targetDir = latLonToVector3(lat, lon, 1.0).normalize();
-      const targetPos = targetDir.multiplyScalar(distance);
+      const safeDistance = Math.max(distance, LUNAR_RADIUS * 1.85);
+      const targetPos = targetDir.multiplyScalar(safeDistance);
       animRef.current = {
         active: true,
         startPos: camera.position.clone(),
@@ -326,7 +327,8 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
     },
     resetView: () => {
       if (cameraRef.current) {
-        const targetPos = latLonToVector3(23.7, -47.4, 3.8);
+        const targetDir = latLonToVector3(23.7, -47.4, 1.0).normalize();
+        const targetPos = targetDir.multiplyScalar(LUNAR_RADIUS * 1.85); // 3.7 units safely above surface
         animRef.current = {
           active: true,
           startPos: cameraRef.current.position.clone(),
@@ -815,7 +817,13 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
     if (!camera) return;
 
     const targetDir = latLonToVector3(landmark.lat, landmark.lon, 1.0).normalize();
-    const distance = landmark.diameter_km ? Math.max(2.65, 2.0 + landmark.diameter_km / 75) : 3.4;
+    // Altitude offset multiplier (1.85x radius = 3.7 units) to keep camera safely above surface (R=2.0)
+    // and completely eliminate clipping or globe disappearing
+    const altitudeMultiplier = 1.85;
+    const baseDistance = LUNAR_RADIUS * altitudeMultiplier;
+    const distance = landmark.diameter_km
+      ? Math.max(baseDistance, baseDistance + landmark.diameter_km / 100)
+      : baseDistance;
     const targetPos = targetDir.multiplyScalar(distance);
 
     animRef.current = {
@@ -840,6 +848,7 @@ const LunarViewer = forwardRef<LunarViewerRef, LunarViewerProps>(function LunarV
       category: "Mountain",
       lat: 23.7,
       lon: -47.4,
+      diameter_km: 40.0,
       elevation_m: -1240,
       description: "Primary registration sector for Chandrayaan-2 cross-modal benchmark.",
       geological_interest: "High albedo plateau, pyroclastic volcanic deposits",
