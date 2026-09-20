@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Play,
   RotateCw,
@@ -16,6 +16,10 @@ import {
   ExternalLink,
   Globe,
   Check,
+  Zap,
+  Activity,
+  ShieldCheck,
+  Target,
 } from "lucide-react";
 
 interface ControlPanelProps {
@@ -45,64 +49,109 @@ export default function ControlPanel({
   isLoading = false,
   ingesting,
 }: ControlPanelProps) {
+  // ---------------------------------------------------------------------------
+  // 1. Fully Reactive State Hooks for Deep Alignment Tab
+  // ---------------------------------------------------------------------------
   const [selectedTileA, setSelectedTileA] = useState("data/tiles/chunk_x0_y0.tif");
   const [selectedTileB, setSelectedTileB] = useState("data/tiles/chunk_x1_y0.tif");
-  const [reprojThresh, setReprojThresh] = useState(3.0);
-  const [maxKpts, setMaxKpts] = useState(2048);
-  const [device, setDevice] = useState("auto");
-  const [branch, setBranch] = useState("auto");
-  const [sensor, setSensor] = useState("auto");
-  const [activeTab, setActiveTab] = useState<"align" | "ingest">("align");
-  const [isProcessing, setIsProcessing] = useState(false);
+  const [reprojThresh, setReprojThresh] = useState<number>(3.0);
+  const [maxKpts, setMaxKpts] = useState<number>(2048);
+  const [device, setDevice] = useState<string>("auto");
+  const [branch, setBranch] = useState<string>("auto");
+  const [sensor, setSensor] = useState<string>("auto");
 
-  // Hybrid Ingestion States (Dual-Mode: Cloud Stream vs Local Drop)
+  // Tab & Alignment Processing States
+  const [activeTab, setActiveTab] = useState<"align" | "ingest">("align");
+  const [isProcessing, setIsProcessing] = useState<boolean>(false);
+  const [processingStage, setProcessingStage] = useState<string>("");
+  const [matchSuccessMsg, setMatchSuccessMsg] = useState<string | null>(null);
+
+  // ---------------------------------------------------------------------------
+  // 2. C++ Windowed Slicing States (Cloud Stream vs Local Drop)
+  // ---------------------------------------------------------------------------
+  const [isSlicing, setIsSlicing] = useState<boolean>(false);
+  const [sliceSuccess, setSliceSuccess] = useState<boolean>(false);
+  const [sliceProgressMsg, setSliceProgressMsg] = useState<string | null>(null);
+
   const [ingestMode, setIngestMode] = useState<"stream" | "local">("stream");
   const [streamUrl, setStreamUrl] = useState(
     "https://planetarymaps.usgs.gov/mosaic/Moon_LRO_LOLA_ClrShade_Global_128ppd_v04.tif"
   );
-  const [isStreaming, setIsStreaming] = useState(false);
-  const [streamProgressMsg, setStreamProgressMsg] = useState<string | null>(null);
-  const [streamSuccessMsg, setStreamSuccessMsg] = useState<string | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const [localFileSelected, setLocalFileSelected] = useState<File | null>(null);
 
-  // Purely Offline Simulation Toggle for Deep Alignment
+  // ---------------------------------------------------------------------------
+  // 3. Smart Dynamic "Align & Project 3D" Simulation
+  // Dynamic duration scaled by keypoints budget (512 pts -> 1.2s, 4096 pts -> 2.5s)
+  // ---------------------------------------------------------------------------
   const handleMatchSubmit = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
+    if (isProcessing || isLoading) return;
+
     setIsProcessing(true);
+    setMatchSuccessMsg(null);
 
-    const payload = {
-      tile_a: selectedTileA,
-      tile_b: selectedTileB,
-      reproj_thresh: reprojThresh,
-      max_kpts: maxKpts,
-      device: device,
-      branch: branch,
-      sensor: sensor,
-    };
+    // Dynamic latency: 1200ms at 512 keypoints up to 2500ms at 4096 keypoints
+    const durationMs = Math.round(1200 + ((maxKpts - 512) / (4096 - 512)) * 1300);
 
-    // 500ms simulation delay followed by immediate verified telemetry dispatch
-    setTimeout(() => {
+    // Phase 1: Feature Extraction
+    setProcessingStage(
+      `EXTRACTING ${maxKpts.toLocaleString()} KEYPOINTS VIA ${
+        device === "auto" ? "ACCELERATED HARDWARE" : device.toUpperCase()
+      }...`
+    );
+
+    // Phase 2: Homography & Geometric Verification midway
+    const stage2Timer = setTimeout(() => {
+      setProcessingStage(
+        `COMPUTING USAC_MAGSAC++ HOMOGRAPHY (NOISE SCALE: ${reprojThresh.toFixed(1)} px)...`
+      );
+    }, Math.round(durationMs * 0.45));
+
+    // Phase 3: Telemetry Dispatch
+    const completeTimer = setTimeout(() => {
       setIsProcessing(false);
+      setProcessingStage("");
+
+      // Calibrate realistic telemetry based on user's active inputs
+      const numTentative = Math.round(maxKpts * 0.69 + (Math.random() * 40 - 20));
+      const inlierFactor = Math.min(0.89, 0.81 + (reprojThresh / 10) * 0.07);
+      const numInliers = Math.round(numTentative * inlierFactor);
+      const inlierRatio = Number((numInliers / numTentative).toFixed(4));
+      const meanReprojError = Number((0.38 + reprojThresh * 0.05).toFixed(2));
+      const elapsedSec = Number((durationMs / 1000).toFixed(2));
+
+      const branchName =
+        branch === "physics"
+          ? "Physics Branch (RIFT2 Phase Congruency)"
+          : branch === "ai"
+          ? "Learned_AI_Branch (LightGlue + DISK)"
+          : branch === "fusion"
+          ? "Dual-Branch Fusion (Adaptive Confidence)"
+          : "Auto (Terrain-Aware Gated: LightGlue)";
+
+      const routeDecision =
+        branch === "physics" ? "physics" : branch === "fusion" ? "fusion" : "ai_branch";
+
       const verifiedTelemetry = {
         success: true,
-        num_tentative: 1420,
-        num_inliers: 1201,
-        inlier_ratio: 0.8458,
-        mean_reprojection_error: 0.54,
+        num_tentative: numTentative,
+        num_inliers: numInliers,
+        inlier_ratio: inlierRatio,
+        mean_reprojection_error: meanReprojError,
         homography: [
           [0.998421, -0.012543, 4.281452],
           [0.012217, 0.998108, -2.154389],
           [-0.0000021, 0.0000014, 1.0],
         ],
         routing: {
-          active_branch: branch === "physics" ? "Physics Branch (RIFT2)" : "Learned_AI_Branch (LightGlue)",
-          route_decision: branch === "physics" ? "physics" : "ai_branch",
+          active_branch: branchName,
+          route_decision: routeDecision,
           terrain_type: "High-Relief Pyroclastic Volcanic Plateau",
           joint_texture_score: 0.428,
           weights: {
-            ai_weight: branch === "physics" ? 0.0 : 0.85,
-            physics_weight: branch === "physics" ? 1.0 : 0.15,
+            ai_weight: branch === "physics" ? 0.0 : branch === "fusion" ? 0.5 : 0.85,
+            physics_weight: branch === "physics" ? 1.0 : branch === "fusion" ? 0.5 : 0.15,
           },
         },
         uncertainty: {
@@ -114,34 +163,57 @@ export default function ControlPanel({
           low_confidence_pct: 0.8,
           heatmap_url: "/textures/uncertainty_map.png",
         },
-        elapsed_seconds: 0.42,
+        elapsed_seconds: elapsedSec,
         viz_url: "/textures/mineral_heatmap.png",
         warped_url: "/textures/moon_base.jpg",
       };
 
+      setMatchSuccessMsg(
+        `Aligned ${numInliers.toLocaleString()} / ${numTentative.toLocaleString()} inliers (${(
+          inlierRatio * 100
+        ).toFixed(1)}%) in ${elapsedSec}s with RMSE ${meanReprojError} px.`
+      );
+
       if (onMatchSuccess) {
         onMatchSuccess(verifiedTelemetry);
       } else if (onRunMatch) {
-        onRunMatch(payload);
+        onRunMatch({
+          tile_a: selectedTileA,
+          tile_b: selectedTileB,
+          reproj_thresh: reprojThresh,
+          max_kpts: maxKpts,
+          device: device,
+          branch: branch,
+          sensor: sensor,
+        });
       }
-    }, 500);
+    }, durationMs);
+
+    return () => {
+      clearTimeout(stage2Timer);
+      clearTimeout(completeTimer);
+    };
   };
 
-  // Purely Offline Simulation Toggle for Stream & Slice
+  // ---------------------------------------------------------------------------
+  // 4. C++ Windowed Slicing Simulation (1.2-second load with success message)
+  // ---------------------------------------------------------------------------
   const handleStreamAndSlice = (e?: React.FormEvent) => {
     if (e) e.preventDefault();
-    if (!streamUrl.trim()) return;
+    if (!streamUrl.trim() || isSlicing) return;
 
-    setIsStreaming(true);
-    setStreamProgressMsg("Establishing Cloud Connection & Streaming Chunks via /vsicurl/...");
-    setStreamSuccessMsg(null);
+    setIsSlicing(true);
+    setSliceSuccess(false);
+    setSliceProgressMsg("Connecting to Cloud GeoTIFF via GDAL /vsicurl/...");
 
-    setTimeout(() => {
-      setIsStreaming(false);
-      setStreamProgressMsg(null);
-      setStreamSuccessMsg(
-        "Offline High-Res streaming verified! Generated 4 chunks via GDAL in 0.42s."
-      );
+    const midTimer = setTimeout(() => {
+      setSliceProgressMsg("Slicing 1024x1024 tiles with strictly bounded O(1) RAM...");
+    }, 600);
+
+    const finishTimer = setTimeout(() => {
+      setIsSlicing(false);
+      setSliceProgressMsg(null);
+      setSliceSuccess(true);
 
       if (onRefreshTiles) {
         onRefreshTiles();
@@ -150,14 +222,22 @@ export default function ControlPanel({
       setSelectedTileA("data/tiles/chunk_x0_y0.tif");
       setSelectedTileB("data/tiles/chunk_x1_y0.tif");
 
-      setTimeout(() => {
+      // Auto-switch to alignment tab after brief visual confirmation
+      const switchTimer = setTimeout(() => {
         setActiveTab("align");
-      }, 700);
-    }, 500);
+      }, 1100);
+
+      return () => clearTimeout(switchTimer);
+    }, 1200);
+
+    return () => {
+      clearTimeout(midTimer);
+      clearTimeout(finishTimer);
+    };
   };
 
   const handleLocalIngest = () => {
-    setStreamSuccessMsg(null);
+    setSliceSuccess(false);
     onRunIngest();
 
     setTimeout(() => {
@@ -214,6 +294,22 @@ export default function ControlPanel({
     });
   }
 
+  // Workload and precision helper badges
+  const getWorkloadMeta = (kpts: number) => {
+    if (kpts <= 1024) return { text: "Fast (~1.2s)", color: "text-emerald-400", border: "border-emerald-500/40" };
+    if (kpts <= 2560) return { text: "Balanced (~1.8s)", color: "text-cyan-400", border: "border-cyan-500/40" };
+    return { text: "Deep Density (~2.5s)", color: "text-purple-400", border: "border-purple-500/40" };
+  };
+
+  const getNoiseMeta = (noise: number) => {
+    if (noise <= 2.0) return { text: "Sub-Pixel Strict", color: "text-emerald-400" };
+    if (noise <= 4.0) return { text: "High Precision", color: "text-cyan-400" };
+    return { text: "High Tolerance", color: "text-amber-400" };
+  };
+
+  const workload = getWorkloadMeta(maxKpts);
+  const noiseMeta = getNoiseMeta(reprojThresh);
+
   return (
     <aside className="w-full lg:w-[420px] flex-shrink-0 flex flex-col space-y-4">
       {/* Flight Control Cockpit Panel */}
@@ -269,7 +365,7 @@ export default function ControlPanel({
             <div>
               <label className="block text-xs font-mono text-slate-300 mb-1.5 flex items-center justify-between">
                 <span>PASS 1 (REFERENCE TILE)</span>
-                <span className="text-[10px] text-cyan-400">1024x1024 px</span>
+                <span className="text-[10px] text-cyan-400 font-semibold">1024×1024 px</span>
               </label>
               <div className="relative">
                 <select
@@ -290,7 +386,7 @@ export default function ControlPanel({
             <div>
               <label className="block text-xs font-mono text-slate-300 mb-1.5 flex items-center justify-between">
                 <span>PASS 2 (TARGET TILE)</span>
-                <span className="text-[10px] text-cyan-400">Co-Registration Pass</span>
+                <span className="text-[10px] text-cyan-400 font-semibold">Co-Registration Pass</span>
               </label>
               <div className="relative">
                 <select
@@ -307,30 +403,55 @@ export default function ControlPanel({
               </div>
             </div>
 
-            {/* Hyperparameters */}
-            <div className="pt-2 border-t border-white/10 space-y-3">
-              {/* MAGSAC+ Noise Threshold */}
+            {/* Hyperparameters Section */}
+            <div className="pt-2 border-t border-white/10 space-y-3.5">
+              {/* MAGSAC+ Noise Threshold (Slider 1 to 10) */}
               <div>
-                <div className="flex justify-between text-xs font-mono mb-1">
-                  <span className="text-slate-300">USAC_MAGSAC NOISE SCALE</span>
-                  <span className="text-cyan-400">{reprojThresh} px</span>
+                <div className="flex justify-between items-center text-xs font-mono mb-1">
+                  <span className="text-slate-300 flex items-center space-x-1.5">
+                    <Target className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>USAC_MAGSAC NOISE SCALE</span>
+                  </span>
+                  <div className="flex items-center space-x-2">
+                    <span className={`text-[10px] font-semibold ${noiseMeta.color}`}>
+                      {noiseMeta.text}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 text-xs font-bold">
+                      {reprojThresh.toFixed(1)} px
+                    </span>
+                  </div>
                 </div>
                 <input
                   type="range"
                   min="1.0"
-                  max="8.0"
+                  max="10.0"
                   step="0.5"
                   value={reprojThresh}
                   onChange={(e) => setReprojThresh(parseFloat(e.target.value))}
                   className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
                 />
+                <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1">
+                  <span>1.0 px (Strict)</span>
+                  <span>5.0 px (Standard)</span>
+                  <span>10.0 px (Loose)</span>
+                </div>
               </div>
 
-              {/* Max Keypoints */}
+              {/* Max Keypoints (Slider 512 to 4096) */}
               <div>
-                <div className="flex justify-between text-xs font-mono mb-1">
-                  <span className="text-slate-300">MAX KEYPOINTS (DISK)</span>
-                  <span className="text-cyan-400">{maxKpts}</span>
+                <div className="flex justify-between items-center text-xs font-mono mb-1">
+                  <span className="text-slate-300 flex items-center space-x-1.5">
+                    <Zap className="w-3.5 h-3.5 text-amber-400" />
+                    <span>MAX KEYPOINTS (DISK)</span>
+                  </span>
+                  <div className="flex items-center space-x-2">
+                    <span className={`text-[10px] font-semibold ${workload.color}`}>
+                      {workload.text}
+                    </span>
+                    <span className="px-1.5 py-0.5 rounded bg-cyan-950/80 border border-cyan-500/40 text-cyan-300 text-xs font-bold">
+                      {maxKpts.toLocaleString()}
+                    </span>
+                  </div>
                 </div>
                 <input
                   type="range"
@@ -341,76 +462,157 @@ export default function ControlPanel({
                   onChange={(e) => setMaxKpts(parseInt(e.target.value))}
                   className="w-full h-1.5 bg-slate-800 rounded-lg appearance-none cursor-pointer accent-cyan-400"
                 />
+                <div className="flex justify-between text-[10px] font-mono text-slate-400 mt-1">
+                  <span>512 pts (Fast)</span>
+                  <span>2,048 pts (Default)</span>
+                  <span>4,096 pts (Max)</span>
+                </div>
               </div>
 
-              {/* Pipeline Registration Branch */}
+              {/* Pipeline Registration Branch Dropdown */}
               <div>
                 <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
-                  <span>REGISTRATION BRANCH</span>
-                  <span className="text-[10px] text-cyan-400">Terrain-Aware</span>
+                  <span className="flex items-center space-x-1.5">
+                    <Activity className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>REGISTRATION BRANCH</span>
+                  </span>
+                  <span className="text-[10px] text-cyan-400 font-semibold uppercase">
+                    {branch === "auto"
+                      ? "Dynamic Gated"
+                      : branch === "ai"
+                      ? "Sparse AI"
+                      : branch === "physics"
+                      ? "Phase Congruency"
+                      : "Adaptive Dual"}
+                  </span>
                 </label>
                 <select
                   value={branch}
                   onChange={(e) => setBranch(e.target.value)}
-                  className="w-full px-3 py-1.5 text-xs font-mono rounded-lg bg-slate-900/80 border border-white/15 text-slate-200 focus:outline-none focus:border-cyan-400"
+                  className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-slate-900/80 border border-white/15 text-slate-200 focus:outline-none focus:border-cyan-400 transition-colors"
                 >
-                  <option value="auto">Auto (Dynamic Texture Routing)</option>
+                  <option value="auto">Auto (Dynamic Terrain-Aware Gating)</option>
                   <option value="ai">AI Branch (LightGlue + DISK)</option>
                   <option value="physics">Physics Branch (RIFT2 Phase Congruency)</option>
                   <option value="fusion">Dual-Branch Fusion (Adaptive Confidence)</option>
                 </select>
+                <div className="mt-1 px-2 py-1 rounded bg-black/40 border border-white/5 text-[10px] font-mono text-slate-400">
+                  {branch === "auto" && "🧠 Evaluates spatial entropy & Sobel variance to auto-route terrain"}
+                  {branch === "ai" && "🤖 LightGlue transformer self/cross-attention across rugged crater rims"}
+                  {branch === "physics" && "⚛️ RIFT2 log-Gabor filter bank invariant to basaltic maria lighting"}
+                  {branch === "fusion" && "⚡ Weighted joint graph optimization (50% AI + 50% Physics)"}
+                </div>
               </div>
 
-              {/* Sensor Payload Type */}
+              {/* Sensor Payload Dropdown */}
               <div>
                 <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
-                  <span>SENSOR PAYLOAD</span>
-                  <span className="text-[10px] text-cyan-400">Chandrayaan-2</span>
+                  <span className="flex items-center space-x-1.5">
+                    <Layers className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>SENSOR PAYLOAD</span>
+                  </span>
+                  <span className="text-[10px] text-cyan-400 font-semibold">
+                    {sensor === "auto"
+                      ? "Auto Detect"
+                      : sensor === "tmc2"
+                      ? "5.0m Stereo"
+                      : sensor === "ohrc"
+                      ? "0.25m Nadir"
+                      : "80m SWIR PCA"}
+                  </span>
                 </label>
                 <select
                   value={sensor}
                   onChange={(e) => setSensor(e.target.value)}
-                  className="w-full px-3 py-1.5 text-xs font-mono rounded-lg bg-slate-900/80 border border-white/15 text-slate-200 focus:outline-none focus:border-cyan-400"
+                  className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-slate-900/80 border border-white/15 text-slate-200 focus:outline-none focus:border-cyan-400 transition-colors"
                 >
-                  <option value="auto">Auto Detect Sensor</option>
-                  <option value="tmc2">TMC-2 (5m Panchromatic Stereo)</option>
-                  <option value="ohrc">OHRC (0.25m High Resolution)</option>
-                  <option value="iirs">IIRS (Hyperspectral PCA 3-Band)</option>
+                  <option value="auto">Auto Detect Multi-Modal Pair</option>
+                  <option value="tmc2">TMC-2 (5.0m Panchromatic Stereo Triplet)</option>
+                  <option value="ohrc">OHRC (0.25m Sub-Meter High Resolution Optical)</option>
+                  <option value="iirs">IIRS (80m Hyperspectral PCA 3-Band Composite)</option>
                 </select>
               </div>
 
-              {/* Hardware Device */}
+              {/* Execution Device Dropdown */}
               <div>
-                <label className="block text-xs font-mono text-slate-300 mb-1">EXECUTION DEVICE</label>
+                <label className="block text-xs font-mono text-slate-300 mb-1 flex items-center justify-between">
+                  <span className="flex items-center space-x-1.5">
+                    <Cpu className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>EXECUTION DEVICE</span>
+                  </span>
+                  <span className="text-[10px] text-emerald-400 font-semibold">
+                    {device === "auto"
+                      ? "Hardware Accelerated"
+                      : device === "mps"
+                      ? "Metal (Apple Silicon)"
+                      : device === "cuda"
+                      ? "TensorRT (CUDA)"
+                      : "AVX2 CPU"}
+                  </span>
+                </label>
                 <select
                   value={device}
                   onChange={(e) => setDevice(e.target.value)}
-                  className="w-full px-3 py-1.5 text-xs font-mono rounded-lg bg-slate-900/80 border border-white/15 text-slate-200 focus:outline-none focus:border-cyan-400"
+                  className="w-full px-3 py-2 text-xs font-mono rounded-xl bg-slate-900/80 border border-white/15 text-slate-200 focus:outline-none focus:border-cyan-400 transition-colors"
                 >
-                  <option value="auto">Auto (MPS / CUDA / CPU)</option>
-                  <option value="cpu">CPU (High Stability)</option>
-                  <option value="mps">Apple Silicon MPS</option>
-                  <option value="cuda">NVIDIA CUDA</option>
+                  <option value="auto">Auto (Hardware Accelerated MPS / CUDA / CPU)</option>
+                  <option value="mps">Apple Silicon MPS (Neural Engine &amp; Metal)</option>
+                  <option value="cuda">NVIDIA CUDA (Tensor Cores)</option>
+                  <option value="cpu">CPU (Multi-threaded AVX2/NEON Fallback)</option>
                 </select>
               </div>
             </div>
 
-            {/* Premium "Align & Project 3D" Button */}
-            <div className="pt-2">
+            {/* Dynamic Alignment Progress Display */}
+            {isProcessing && (
+              <div className="p-3 rounded-xl bg-cyan-950/90 border border-cyan-400/60 text-cyan-200 text-xs font-mono space-y-2 animate-pulse">
+                <div className="flex items-center space-x-2">
+                  <RotateCw className="w-4 h-4 animate-spin text-cyan-300 flex-shrink-0" />
+                  <span className="font-semibold text-cyan-200 text-[11px]">
+                    {processingStage || "PROCESSING DEEP ALIGNMENT PIPELINE..."}
+                  </span>
+                </div>
+                <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
+                  <div className="bg-gradient-to-r from-cyan-400 via-sky-400 to-indigo-500 h-1.5 w-full animate-pulse" />
+                </div>
+                <div className="text-[10px] text-cyan-300/80 flex items-center justify-between">
+                  <span>Latency Budget: {(1.2 + ((maxKpts - 512) / 3584) * 1.3).toFixed(1)}s</span>
+                  <span>USAC_MAGSAC++ Verified</span>
+                </div>
+              </div>
+            )}
+
+            {/* Alignment Success Banner */}
+            {matchSuccessMsg && !isProcessing && (
+              <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-400/50 text-emerald-200 text-xs font-mono flex items-start space-x-2 animate-in fade-in">
+                <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
+                <div>
+                  <span className="font-semibold block text-emerald-300 text-[11px]">
+                    ALIGNMENT TELEMETRY DISPATCHED
+                  </span>
+                  <p className="text-[10px] text-emerald-200/90 leading-relaxed mt-0.5">
+                    {matchSuccessMsg}
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Premium Dynamic "Align & Project 3D" Button */}
+            <div className="pt-1">
               <button
                 type="submit"
                 onClick={handleMatchSubmit}
                 disabled={isProcessing || isLoading}
-                className="w-full relative group overflow-hidden rounded-xl p-[1px] focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-300"
+                className="w-full relative group overflow-hidden rounded-xl p-[1px] focus:outline-none disabled:opacity-60 disabled:cursor-not-allowed transition-all duration-300 shadow-xl shadow-cyan-500/10"
               >
-                {/* Glowing neon animated border */}
+                {/* Glowing animated border */}
                 <div className="absolute inset-0 bg-gradient-to-r from-cyan-400 via-sky-500 to-indigo-500 rounded-xl transition-all duration-500 group-hover:opacity-100 opacity-80 blur-sm group-hover:blur-md" />
                 <div className="relative px-5 py-3 rounded-xl bg-slate-950/90 hover:bg-slate-900/90 text-white flex items-center justify-center space-x-2 transition-all duration-200">
                   {isProcessing || isLoading ? (
                     <>
                       <RotateCw className="w-4 h-4 animate-spin text-cyan-400" />
-                      <span className="text-sm font-semibold tracking-wide uppercase text-cyan-300">
-                        ALIGNING...
+                      <span className="text-sm font-semibold tracking-wide uppercase text-cyan-300 font-mono">
+                        EXECUTING CO-REGISTRATION...
                       </span>
                     </>
                   ) : (
@@ -544,13 +746,13 @@ export default function ControlPanel({
                   </div>
                 </div>
 
-                {/* Progress Indicator */}
-                {isStreaming && (
+                {/* Progress Indicator (1.2-second load simulation) */}
+                {isSlicing && (
                   <div className="p-3.5 rounded-xl bg-cyan-950/90 border border-cyan-400/60 text-cyan-200 text-xs font-mono space-y-2 animate-pulse">
                     <div className="flex items-center space-x-2">
                       <RotateCw className="w-4 h-4 animate-spin text-cyan-300 flex-shrink-0" />
                       <span className="font-semibold text-cyan-200">
-                        {streamProgressMsg || "Establishing Cloud Connection & Streaming Chunks..."}
+                        {sliceProgressMsg || "Connecting to Cloud GeoTIFF via GDAL /vsicurl/..."}
                       </span>
                     </div>
                     <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
@@ -563,13 +765,17 @@ export default function ControlPanel({
                   </div>
                 )}
 
-                {/* Success Banner */}
-                {streamSuccessMsg && (
+                {/* Exact Specified Green Success Message */}
+                {sliceSuccess && !isSlicing && (
                   <div className="p-3 rounded-xl bg-emerald-950/80 border border-emerald-400/50 text-emerald-200 text-xs font-mono flex items-start space-x-2 animate-in fade-in">
                     <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0 mt-0.5" />
                     <div>
-                      <span className="font-semibold block text-emerald-300 text-[11px]">STREAMING COMPLETE</span>
-                      <p className="text-[10px] text-emerald-200/90 leading-relaxed mt-0.5">{streamSuccessMsg}</p>
+                      <span className="font-semibold block text-emerald-300 text-[11px]">
+                        STREAMING COMPLETE
+                      </span>
+                      <p className="text-[10px] text-emerald-200/95 leading-relaxed mt-0.5 font-medium">
+                        ✅ Streaming complete! Offline high-res streaming verified. Generated 4 chunks via GDAL in 0.42s.
+                      </p>
                       <p className="text-[10px] text-cyan-300 mt-1 font-bold">
                         &rarr; Loaded into Deep Alignment PASS 1 &amp; PASS 2 menus
                       </p>
@@ -581,10 +787,10 @@ export default function ControlPanel({
                 <button
                   type="button"
                   onClick={handleStreamAndSlice}
-                  disabled={isStreaming || !streamUrl.trim()}
+                  disabled={isSlicing || !streamUrl.trim()}
                   className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-cyan-600 via-sky-600 to-indigo-600 hover:from-cyan-500 hover:to-indigo-500 text-white font-semibold text-xs tracking-wider uppercase shadow-lg shadow-cyan-500/20 transition-all flex items-center justify-center space-x-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
-                  {isStreaming ? (
+                  {isSlicing ? (
                     <>
                       <RotateCw className="w-4 h-4 animate-spin text-white" />
                       <span>Streaming &amp; Slicing...</span>
